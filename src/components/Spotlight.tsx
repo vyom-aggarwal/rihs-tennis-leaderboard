@@ -88,7 +88,9 @@ export function Spotlight({ leaders, movementWindowDays, hasDates, onSelect }: P
       {leaders.topThree.length > 0 && (
         <section className="section" aria-labelledby="spotlight-heading">
           <div className="section-head">
-            <h2 id="spotlight-heading">Leaders Spotlight</h2>
+            <h2 id="spotlight-heading" data-eyebrow="Top of the ladder">
+              Leaders Spotlight
+            </h2>
           </div>
           <div className="spotlight">
             {leaders.topThree.map((row, i) => (
@@ -100,7 +102,9 @@ export function Spotlight({ leaders, movementWindowDays, hasDates, onSelect }: P
 
       <section className="section" aria-labelledby="metrics-heading">
         <div className="section-head">
-          <h2 id="metrics-heading">Performance Leaderboards</h2>
+          <h2 id="metrics-heading" data-eyebrow="Season metrics">
+            Performance Leaderboards
+          </h2>
         </div>
         <div className="leaderboards">
           <Board

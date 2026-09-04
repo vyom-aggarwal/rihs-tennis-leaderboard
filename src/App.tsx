@@ -251,7 +251,7 @@ export default function App() {
 
           <section className="section" aria-labelledby="standings-heading">
             <div className="section-head">
-              <h2 id="standings-heading">
+              <h2 id="standings-heading" data-eyebrow="Full ladder">
                 {boards.length > 1 ? activeBoard.label : 'Standings'}
               </h2>
               <span className="section-note">
@@ -292,7 +292,7 @@ export default function App() {
       {state.coach && showCoachPanel && dashboard && (
         <section className="section" aria-labelledby="coach-heading">
           <div className="section-head">
-            <h2 id="coach-heading">Coach console</h2>
+            <h2 id="coach-heading" data-eyebrow="Admin">Coach console</h2>
             <button className="btn btn-sm" onClick={() => setShowCoachPanel(false)}>
               Hide
             </button>

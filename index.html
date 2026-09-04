@@ -15,6 +15,15 @@
          round trip off the initial load on mobile networks (PRD 7: under 2s on 4G). -->
     <link rel="preconnect" href="https://docs.google.com" crossorigin />
     <link rel="dns-prefetch" href="https://docs.google.com" />
+
+    <!-- Display face. `display=swap` means text paints in the fallback immediately and
+         never blocks first render, so the 2s budget holds even on a cold cache. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>
