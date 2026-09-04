@@ -11,7 +11,7 @@
  * that cannot be corrected is worse than no auto-detection at all.
  */
 
-import { normalizeHeader, type CsvTable } from './csv';
+import type { CsvTable } from './csv';
 import { parseGameColumns, parseScoreString, validateScore } from './score';
 import type {
   ActiveStatus,
