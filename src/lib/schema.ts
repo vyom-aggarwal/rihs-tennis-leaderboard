@@ -164,6 +164,22 @@ export function isBlank(value: string | undefined): boolean {
   return value === undefined || value.trim() === '';
 }
 
+/**
+ * How much a spelling reads as a written name, used to choose between variants that
+ * appear equally often. "Jake" should beat "jake" and "JAKE" on the scoreboard, and a
+ * coach typing quickly courtside produces all three in one season.
+ */
+function spellingQuality(name: string): number {
+  const words = name.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 0;
+  const titleCase = words.every((w) => /^[\p{Lu}][\p{Ll}'’.-]*$/u.test(w));
+  if (titleCase) return 3;
+  const allCaps = name === name.toUpperCase() && /\p{Lu}/u.test(name);
+  const allLower = name === name.toLowerCase() && /\p{Ll}/u.test(name);
+  if (allCaps || allLower) return 0;
+  return 1; // mixed case that is not clean title case
+}
+
 // ---------------------------------------------------------------------------
 // Value coercion
 // ---------------------------------------------------------------------------
@@ -425,19 +441,17 @@ export function mapMatches(
     });
   });
 
-  // Pick the most frequently used spelling as each player's display name; ties break
-  // toward the alphabetically first spelling so the choice is deterministic.
+  // Pick each player's display name: most frequent spelling wins, then the
+  // best-capitalized one, then alphabetical so the choice is always deterministic.
   const displayNames = new Map<string, string>();
   for (const [key, counts] of nameCounts) {
-    let bestName = '';
-    let bestCount = -1;
-    for (const [name, count] of [...counts].sort((x, y) => x[0].localeCompare(y[0]))) {
-      if (count > bestCount) {
-        bestCount = count;
-        bestName = name;
-      }
-    }
-    displayNames.set(key, bestName);
+    const best = [...counts].sort(
+      (x, y) =>
+        y[1] - x[1] || // most frequently written
+        spellingQuality(y[0]) - spellingQuality(x[0]) || // then the one that reads as a name
+        x[0].localeCompare(y[0]), // then deterministic
+    )[0];
+    displayNames.set(key, best ? best[0] : key);
   }
 
   return { matches, issues, displayNames };
