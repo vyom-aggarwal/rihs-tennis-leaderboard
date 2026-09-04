@@ -21,14 +21,13 @@ export function Movement({ movement }: { movement: number | null }) {
     );
   }
   const up = movement > 0;
+  const places = Math.abs(movement);
+  const label = (up ? 'Up ' : 'Down ') + places + (places === 1 ? ' place' : ' places');
   return (
-    <span
-      className={'movement ' + (up ? 'up' : 'down')}
-      title={(up ? 'Up ' : 'Down ') + Math.abs(movement) + ' since 30 days ago'}
-    >
+    <span className={'movement ' + (up ? 'up' : 'down')} title={label}>
       <span aria-hidden="true">{up ? '↑' : '↓'}</span>
-      {Math.abs(movement)}
-      <span className="sr-only">{up ? 'Up' : 'Down'} {Math.abs(movement)} places</span>
+      {places}
+      <span className="sr-only">{label}</span>
     </span>
   );
 }
