@@ -8,13 +8,16 @@
  * it free to run and impossible to get out of sync with the coach's records.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CoachPanel } from './components/CoachPanel';
-import { PlayerDrawer } from './components/PlayerDrawer';
 import { Setup } from './components/Setup';
-import { Spotlight } from './components/Spotlight';
-import { Standings } from './components/Standings';
-import { relativeTime } from './components/common';
+import { formatDate } from './components/common';
+import {
+  DrawSheetLeaderboard,
+  type DrawSheetDivision,
+  type DrawSheetStatus,
+  type MatchLogEntry,
+} from './design/DrawSheetLeaderboard';
 import { useLiveSheet } from './hooks/useLiveSheet';
 import {
   coachUrl,
@@ -36,10 +39,10 @@ const DEMO_ID = '__demo__';
 export default function App() {
   const [state, setState] = useState<AppState>(() => readAppState(window.location.search));
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [showCoachPanel, setShowCoachPanel] = useState(false);
   const [mappingOverride, setMappingOverride] = useState<Partial<MatchMapping>>({});
-  const [tick, setTick] = useState(0);
+  // Ticks once a minute purely to force a re-render, so the "updated 3m ago" label stays truthful.
+  const [, setTick] = useState(0);
 
   const isDemo = state.sheetId === DEMO_ID;
   const recalled = useMemo(() => recallSheet(), []);
@@ -86,9 +89,6 @@ export default function App() {
   const activeBoard =
     boards.find((b) => (b.team ?? b.label) === selectedTeam) ?? boards[0] ?? null;
 
-  const selectedRow: StandingRow | null =
-    activeBoard?.standings.find((s) => s.key === selectedKey) ?? null;
-
   const setConfig = useCallback((patch: Partial<LadderConfig>) => {
     setState((s) => ({ ...s, config: { ...s.config, ...patch } }));
   }, []);
@@ -99,337 +99,245 @@ export default function App() {
     setSelectedTeam(null);
   }, []);
 
+  const matchLog = useCallback(
+    (row: StandingRow): MatchLogEntry[] => {
+      if (!activeBoard) return [];
+      return activeBoard.matches
+        .filter((m) => m.playerA === row.key || m.playerB === row.key)
+        .sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0))
+        .slice(0, 8)
+        .map((m) => {
+          const isA = m.playerA === row.key;
+          const won = (isA && m.winner === 'a') || (!isA && m.winner === 'b');
+          return {
+            date: formatDate(m.date),
+            opponent: isA ? m.displayB : m.displayA,
+            score: m.score.raw,
+            result: won ? 'W' : ('L' as const),
+          };
+        });
+    },
+    [activeBoard],
+  );
+
   // ------------------------------------------------------------------ setup
   if (!state.sheetId) {
     return (
-      <Shell state={state} live={null} onOpenCoach={undefined}>
-        <Setup
-          onSubmit={connect}
-          onTryDemo={() => setState((s) => ({ ...s, sheetId: DEMO_ID, coach: true }))}
-          recalled={recalled?.sheetId ? { sheetId: recalled.sheetId, gid: recalled.gid } : null}
-          onResume={
-            recalled?.sheetId
-              ? () =>
-                  setState((s) => ({
-                    ...s,
-                    sheetId: recalled.sheetId,
-                    gid: recalled.gid,
-                    rosterGid: recalled.rosterGid,
-                  }))
-              : undefined
-          }
-        />
-      </Shell>
-    );
-  }
-
-  // ------------------------------------------------------------- first load
-  if (live.loading && !matchesCsv) {
-    return (
-      <Shell state={state} live={live} onOpenCoach={undefined}>
-        <div className="section stack" aria-busy="true" aria-live="polite">
-          <span className="sr-only">Loading the ladder…</span>
-          <div className="skeleton" style={{ height: 46 }} />
-          <div className="skeleton" style={{ height: 128 }} />
-          <div className="skeleton" style={{ height: 320 }} />
-        </div>
-      </Shell>
-    );
-  }
-
-  // ------------------------------------------------- unrecoverable load error
-  if (live.error && !matchesCsv) {
-    return (
-      <Shell state={state} live={live} onOpenCoach={undefined}>
-        <div className="section">
-          <div className="notice notice-error">
-            <strong>Could not load the sheet</strong>
-            {live.error.message}
-            {live.error.attempts.length > 0 && (
-              <ul>
-                {live.error.attempts.map((a, i) => (
-                  <li key={i} className="mono small">
-                    {a}
-                  </li>
-                ))}
-              </ul>
-            )}
+      <div className="app">
+        <header className="masthead">
+          <div className="shell">
+            <div className="masthead-row">
+              <div className="masthead-title">
+                <h1>River Islands High School · Tennis Ladder</h1>
+                <p className="sub">Team standings, straight from your scores sheet</p>
+              </div>
+            </div>
           </div>
-          <div className="row">
-            <button className="btn btn-primary" onClick={live.refresh}>
-              Try again
-            </button>
-            <button
-              className="btn"
-              onClick={() => setState((s) => ({ ...s, sheetId: null, gid: null, rosterGid: null }))}
-            >
-              Use a different sheet
-            </button>
-          </div>
-        </div>
-      </Shell>
+        </header>
+        <main className="shell">
+          <Setup
+            onSubmit={connect}
+            onTryDemo={() => setState((s) => ({ ...s, sheetId: DEMO_ID, coach: true }))}
+            recalled={recalled?.sheetId ? { sheetId: recalled.sheetId, gid: recalled.gid } : null}
+            onResume={
+              recalled?.sheetId
+                ? () =>
+                    setState((s) => ({
+                      ...s,
+                      sheetId: recalled.sheetId,
+                      gid: recalled.gid,
+                      rosterGid: recalled.rosterGid,
+                    }))
+                : undefined
+            }
+          />
+        </main>
+      </div>
     );
   }
 
+  // ------------------------------------------------------------ leaderboard
   const fatal = dashboard ? sortIssues(dashboard.issues).filter((i) => i.severity === 'error') : [];
   const mappingFailed = fatal.some((i) => i.code === 'mapping-incomplete');
-  const hasDates = Boolean(dashboard?.matches.some((m) => m.date !== null));
+  const isFirstLoad = live.loading && !matchesCsv;
+  const isLoadError = Boolean(live.error) && !matchesCsv;
 
-  return (
-    <Shell
-      state={state}
-      live={live}
-      isDemo={isDemo}
-      onOpenCoach={state.coach ? () => setShowCoachPanel((v) => !v) : undefined}
-      coachPanelOpen={showCoachPanel}
-      onExitDemo={isDemo ? () => setState((s) => ({ ...s, sheetId: null })) : undefined}
-      tick={tick}
-    >
-      {isDemo && (
-        <div className="notice notice-info" style={{ marginTop: 16 }}>
-          <strong>Demo data</strong>
+  let status: DrawSheetStatus = 'ready';
+  if (isFirstLoad) status = 'loading';
+  else if (isLoadError || mappingFailed) status = 'blocked';
+
+  let blockedTitle: string | undefined;
+  let blockedMessage: ReactNode = null;
+  let blockedActions: ReactNode = null;
+
+  if (isLoadError && live.error) {
+    blockedTitle = 'Could not load the sheet';
+    blockedMessage = (
+      <>
+        {live.error.message}
+        {live.error.attempts.length > 0 && (
+          <ul className="ds-attempts">
+            {live.error.attempts.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        )}
+      </>
+    );
+    blockedActions = (
+      <>
+        <button className="ds-text-link" onClick={live.refresh}>
+          Try again
+        </button>
+        <button
+          className="ds-text-link"
+          onClick={() => setState((s) => ({ ...s, sheetId: null, gid: null, rosterGid: null }))}
+        >
+          Use a different sheet
+        </button>
+      </>
+    );
+  } else if (mappingFailed) {
+    blockedTitle = 'The columns in this sheet were not recognized';
+    blockedMessage =
+      fatal.map((i) => i.message).join(' ') +
+      (!state.coach ? ' Ask your coach to check the sheet layout.' : '');
+    blockedActions = state.coach ? (
+      <button className="ds-text-link" onClick={() => setShowCoachPanel(true)}>
+        Open column mapping
+      </button>
+    ) : null;
+  }
+
+  const divisions: DrawSheetDivision[] = boards.map((b) => ({
+    id: b.team ?? b.label,
+    label: b.label,
+    standings: b.standings,
+  }));
+  const activeDivisionId = activeBoard ? (activeBoard.team ?? activeBoard.label) : '';
+
+  const allIssues = dashboard ? sortIssues(dashboard.issues) : [];
+  const visibleIssues = allIssues.filter((i) => i.severity === 'error' && i.code !== 'mapping-incomplete');
+  const collapsedIssues = allIssues.filter((i) => i.severity === 'warning');
+
+  let banner: ReactNode = null;
+  if (isDemo) {
+    banner = (
+      <div className="ds-notice">
+        <p className="ds-notice-label">Demo data</p>
+        <p>
           A simulated season for two ladders, so you can see every feature before connecting your
           own sheet.
-        </div>
+        </p>
+      </div>
+    );
+  } else if (live.error && matchesCsv) {
+    banner = (
+      <div className="ds-notice">
+        <p className="ds-notice-label">Showing the last ladder that loaded</p>
+        <p>{live.error.message}</p>
+      </div>
+    );
+  }
+
+  const headerActions = (
+    <>
+      {!isDemo && (
+        <button onClick={live.refresh} disabled={live.refreshing}>
+          {live.refreshing ? 'Updating…' : 'Refresh'}
+        </button>
       )}
-
-      {live.error && matchesCsv && (
-        <div className="notice notice-warn" style={{ marginTop: 16 }}>
-          <strong>Showing the last ladder that loaded</strong>
-          {live.error.message}
-        </div>
+      {isDemo && (
+        <button onClick={() => setState((s) => ({ ...s, sheetId: null }))}>Use my sheet</button>
       )}
-
-      {mappingFailed && dashboard && (
-        <div className="notice notice-error" style={{ marginTop: 16 }}>
-          <strong>The columns in this sheet were not recognised</strong>
-          {fatal.map((i) => i.message).join(' ')}
-          {!state.coach && ' Ask your coach to check the sheet layout.'}
-          {state.coach && (
-            <>
-              {' '}
-              <button className="btn btn-sm" onClick={() => setShowCoachPanel(true)}>
-                Open column mapping
-              </button>
-            </>
-          )}
-        </div>
+      {state.coach && (
+        <button onClick={() => setShowCoachPanel((v) => !v)}>
+          {showCoachPanel ? 'Close console' : 'Coach console'}
+        </button>
       )}
+    </>
+  );
 
-      {/* AC-1.1.1: ladder tabs. Both boards are already computed, so switching is instant. */}
-      {boards.length > 1 && (
-        <div className="tabs" role="tablist" aria-label="Choose a ladder">
-          {boards.map((board) => {
-            const id = board.team ?? board.label;
-            const active = board === activeBoard;
-            return (
-              <button
-                key={id}
-                role="tab"
-                aria-selected={active}
-                className="tab"
-                onClick={() => {
-                  setSelectedTeam(id);
-                  setSelectedKey(null);
-                }}
-              >
-                {board.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {activeBoard && (
-        <>
-          <Spotlight
-            leaders={activeBoard.leaders}
-            movementWindowDays={state.config.movementWindowDays}
-            hasDates={hasDates}
-            onSelect={setSelectedKey}
-          />
-
-          <section className="section" aria-labelledby="standings-heading">
-            <div className="section-head">
-              <h2 id="standings-heading" data-eyebrow="Full ladder">
-                {boards.length > 1 ? activeBoard.label : 'Standings'}
-              </h2>
-              <span className="section-note">
-                {activeBoard.standings.length} players · {activeBoard.matches.length} matches
-                {!hasDates && ' · add a Date column for movement arrows'}
-              </span>
-            </div>
-            <Standings
-              standings={activeBoard.standings}
-              onSelect={(row) => setSelectedKey(row.key)}
-              movementWindowDays={state.config.movementWindowDays}
-            />
-          </section>
-        </>
-      )}
-
-      {/* Non-fatal data warnings are shown to everyone, briefly - a ladder built on a
-          row the app could not read should say so, not just to the coach. */}
-      {dashboard && !state.coach && dashboard.issues.length > 0 && !mappingFailed && (
-        <div className="section">
-          <details className="card panel">
-            <summary className="small muted" style={{ cursor: 'pointer' }}>
-              {dashboard.issues.length} note{dashboard.issues.length === 1 ? '' : 's'} about this
+  const afterTable =
+    status === 'ready' ? (
+      <>
+        {!state.coach && collapsedIssues.length > 0 && (
+          <details className="ds-more-notes">
+            <summary>
+              {collapsedIssues.length} more note{collapsedIssues.length === 1 ? '' : 's'} about this
               sheet&rsquo;s data
             </summary>
-            <ul className="issue-list" style={{ marginTop: 10 }}>
-              {sortIssues(dashboard.issues).slice(0, 12).map((issue, i) => (
-                <li key={i} className="issue">
-                  <span className="issue-row">{issue.sheetRow ? 'Row ' + issue.sheetRow : 'Note'}</span>
-                  <span>{issue.message}</span>
-                </li>
+            <ul>
+              {collapsedIssues.slice(0, 12).map((issue, i) => (
+                <li key={i}>{(issue.sheetRow ? 'Row ' + issue.sheetRow + ': ' : '') + issue.message}</li>
               ))}
             </ul>
           </details>
-        </div>
-      )}
+        )}
 
-      {state.coach && showCoachPanel && dashboard && (
-        <section className="section" aria-labelledby="coach-heading">
-          <div className="section-head">
-            <h2 id="coach-heading" data-eyebrow="Admin">Coach console</h2>
-            <button className="btn btn-sm" onClick={() => setShowCoachPanel(false)}>
-              Hide
-            </button>
+        {state.coach && showCoachPanel && dashboard && (
+          <div className="ds-coach-console">
+            <div className="ds-coach-console-head">
+              <p className="ds-notice-label">Coach console</p>
+              <button className="ds-text-link" onClick={() => setShowCoachPanel(false)}>
+                Hide
+              </button>
+            </div>
+            <CoachPanel
+              table={dashboard.table}
+              mapping={dashboard.mapping}
+              onMappingChange={(field: MatchField, index: number) =>
+                setMappingOverride((m) => ({ ...m, [field]: index }))
+              }
+              config={state.config}
+              onConfigChange={setConfig}
+              issues={dashboard.issues}
+              matches={dashboard.matches}
+              displayNames={dashboard.displayNames}
+              teamUrl={teamShareUrl(state, window.location.origin, window.location.pathname)}
+              coachLinkUrl={coachUrl(state, window.location.origin, window.location.pathname)}
+              sheetUrl={
+                isDemo ? '#' : 'https://docs.google.com/spreadsheets/d/' + state.sheetId + '/edit'
+              }
+              refreshSeconds={state.refreshSeconds}
+              onRefreshSecondsChange={(refreshSeconds) => setState((s) => ({ ...s, refreshSeconds }))}
+            />
           </div>
-          <CoachPanel
-            table={dashboard.table}
-            mapping={dashboard.mapping}
-            onMappingChange={(field: MatchField, index: number) =>
-              setMappingOverride((m) => ({ ...m, [field]: index }))
-            }
-            config={state.config}
-            onConfigChange={setConfig}
-            issues={dashboard.issues}
-            matches={dashboard.matches}
-            displayNames={dashboard.displayNames}
-            teamUrl={teamShareUrl(state, window.location.origin, window.location.pathname)}
-            coachLinkUrl={coachUrl(state, window.location.origin, window.location.pathname)}
-            sheetUrl={
-              isDemo
-                ? '#'
-                : 'https://docs.google.com/spreadsheets/d/' + state.sheetId + '/edit'
-            }
-            refreshSeconds={state.refreshSeconds}
-            onRefreshSecondsChange={(refreshSeconds) => setState((s) => ({ ...s, refreshSeconds }))}
-          />
-        </section>
-      )}
+        )}
 
-      {selectedRow && activeBoard && dashboard && (
-        <PlayerDrawer
-          row={selectedRow}
-          standings={activeBoard.standings}
-          matches={activeBoard.matches}
-          config={state.config}
-          openChallenges={[]}
-          now={isDemo ? new Date('2026-09-04T12:00:00Z') : new Date()}
-          onClose={() => setSelectedKey(null)}
-          onSelectPlayer={setSelectedKey}
-        />
-      )}
-
-      <footer className="footer">
-        <p>
-          Ratings are computed from the results in this sheet using a USTA-modelled NTRP-style
-          method. They are <strong>not</strong> official USTA NTRP ratings and should not be
-          reported as such.
-        </p>
-        <p>
-          Only the gaps between players carry meaning — the squad average is pinned to a fixed
-          value because intra-team results cannot establish an absolute level.
-        </p>
-      </footer>
-    </Shell>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-interface ShellProps {
-  state: AppState;
-  live: ReturnType<typeof useLiveSheet> | null;
-  children: React.ReactNode;
-  isDemo?: boolean;
-  onOpenCoach?: (() => void) | undefined;
-  coachPanelOpen?: boolean;
-  onExitDemo?: (() => void) | undefined;
-  tick?: number;
-}
-
-function Shell({
-  state,
-  live,
-  children,
-  isDemo,
-  onOpenCoach,
-  coachPanelOpen,
-  onExitDemo,
-}: ShellProps) {
-  const updated = live?.lastUpdated ?? null;
-  const stale = Boolean(live?.error);
+        <div className="ds-footnote">
+          <p>
+            Ratings are computed from the results in this sheet using a USTA-modeled NTRP-style
+            method. They are <strong>not</strong> official USTA NTRP ratings and should not be
+            reported as such.
+          </p>
+          <p>
+            Only the gaps between players carry meaning — the squad average is pinned to a fixed
+            value because intra-team results cannot establish an absolute level.
+          </p>
+        </div>
+      </>
+    ) : null;
 
   return (
-    <div className="app">
-      <header className="masthead">
-        <div className="shell">
-          <div className="masthead-row">
-            <div className="masthead-title">
-              <h1>River Island High School · Tennis Ladder</h1>
-              <p className="sub">
-                {isDemo
-                  ? 'Demo season'
-                  : state.sheetId
-                    ? 'Live from the team scores sheet'
-                    : 'Team standings, straight from your scores sheet'}
-              </p>
-            </div>
-
-            <div className="masthead-actions">
-              {live && state.sheetId && !isDemo && (
-                <span className="live" title={updated ? 'Last updated ' + updated.toLocaleTimeString() : undefined}>
-                  <span
-                    className={
-                      'live-dot' + (stale ? ' stale' : live.refreshing ? ' pulsing' : '')
-                    }
-                  />
-                  {live.refreshing
-                    ? 'Updating…'
-                    : updated
-                      ? 'Updated ' + relativeTime(updated)
-                      : 'Live'}
-                </span>
-              )}
-              {live && state.sheetId && (
-                <button
-                  className="btn btn-sm btn-ghost-light"
-                  onClick={live.refresh}
-                  disabled={live.refreshing}
-                >
-                  Refresh
-                </button>
-              )}
-              {onExitDemo && (
-                <button className="btn btn-sm btn-ghost-light" onClick={onExitDemo}>
-                  Use my sheet
-                </button>
-              )}
-              {onOpenCoach && (
-                <button className="btn btn-sm btn-ghost-light" onClick={onOpenCoach}>
-                  {coachPanelOpen ? 'Close console' : 'Coach console'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="shell">{children}</main>
-    </div>
+    <DrawSheetLeaderboard
+      teamName="River Islands High School"
+      subtitle="Tennis Ladder"
+      divisions={divisions}
+      activeDivisionId={activeDivisionId}
+      onSelectDivision={setSelectedTeam}
+      status={status}
+      lastSynced={isDemo ? null : live.lastUpdated}
+      now={new Date()}
+      staleAfterMinutes={15}
+      headerActions={headerActions}
+      banner={status === 'ready' ? banner : null}
+      issues={status === 'ready' ? visibleIssues : []}
+      matchLog={matchLog}
+      blockedTitle={blockedTitle}
+      blockedMessage={blockedMessage}
+      blockedActions={blockedActions}
+      afterTable={afterTable}
+    />
   );
 }
