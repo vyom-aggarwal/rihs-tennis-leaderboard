@@ -45,7 +45,7 @@ To use real data, paste a Google Sheets link. Coaches should start with
 [docs/COACH_GUIDE.md](docs/COACH_GUIDE.md).
 
 ```bash
-npm test        # 184 tests
+npm test        # 214 tests
 npm run build   # production build into dist/
 ```
 
@@ -61,22 +61,27 @@ adjusted by game differential, then averaged with recency weighting. Beating a s
 player counts for more, and margin matters, not just the win. Ratings stay *provisional*
 below three matches, the same minimum USTA uses.
 
+**Standings** — rank, movement, avatar, name, grade, division, an Available /
+Challenge Pending / Injury Hold badge, record and rating on every row. Tap a player for
+their stats, recent matches and who they may challenge.
+
 **Leaders spotlight** — top three, Most Wins, Longest Active Streak, and Top Climber over
 30 days.
 
-**Real movement arrows** — the ladder is rebuilt as it stood 30 days ago and compared, so
-arrows stay correct even after a coach fixes an old score. A sheet with no dates shows no
-arrows rather than inventing them.
+**Real movement arrows** — the ladder is rebuilt as it stood 30 days ago from the same
+counted results, and compared, so arrows stay correct even after a coach fixes or rejects
+an old score. A sheet with no dates shows no arrows rather than inventing them.
 
-**Challenge eligibility** — the 3-spot range, injury holds, open-challenge blocking and a
-cooling-off period, with the *reason* shown next to every opponent a player cannot
-challenge.
+**Challenges** — a row with two players and no score yet is an open challenge: both
+players show *Challenge Pending* until the score is typed in. Eligibility enforces the
+3-spot range, injury holds, open-challenge blocking and a cooling-off period, with the
+*reason* shown next to every opponent a player cannot challenge.
 
 **Data health** — every row that could not be read, or that looks unusual, is listed with
 its sheet row number. Nothing is silently dropped or silently corrected.
 
-**Live** — polls every 30 seconds, and immediately when a phone wakes or the network
-returns. Renders from cache instantly, then revalidates.
+**Live** — polls every 30 seconds while the page is open on screen, and immediately when
+a phone wakes or the network returns. Renders from cache instantly, then revalidates.
 
 ---
 
@@ -116,23 +121,30 @@ The minimum that works — the shape of the original sample:
 
 Optional columns, all auto-detected: `Date`, `Team`, `Score` (e.g. `6-4, 7-5`), `Status`,
 `Winner`, `Notes`. Header names are matched loosely, and anything read wrong is fixable in
-**Coach console → Column mapping** without touching the sheet.
+**Coach console → Column mapping** without touching the sheet. Mapping choices are saved
+into the team link, so every teammate reads the sheet the same way.
 
-An optional `Roster` tab adds grade, division, injury status and seed ranks.
+Leave the score blank to record a challenge that has been issued but not yet played.
+
+An optional `Roster` tab adds grade, division, photo, injury status and seed ranks.
+Connect it in **Coach console → Roster tab** by pasting that tab's link.
 
 ---
 
 ## Deploying
 
-Static output — host it anywhere.
+Static output, no environment variables, no server.
+
+**Vercel** — import the repository. The Vite preset is detected, and `vercel.json` pins the
+build (`npm ci`, `npm run build`, `dist/`) and adds long-lived caching for the hashed
+assets plus basic security headers. Every push to `main` redeploys.
+
+**Anywhere else** — Netlify, Cloudflare Pages and GitHub Pages serve the same `dist/`:
 
 ```bash
 npm run build          # → dist/
 VITE_BASE=/repo-name/ npm run build   # for GitHub Pages under a subpath
 ```
-
-Netlify, Vercel, Cloudflare Pages and GitHub Pages all work with no configuration beyond
-`VITE_BASE`.
 
 ---
 
@@ -163,10 +175,12 @@ src/lib/          ranking core — no React, no I/O, fully unit-tested
   schema.ts       column detection and row mapping
   csv.ts          RFC 4180 parser
   sheets.ts       Google Sheets endpoints and error handling
+  config.ts       settings and column mapping carried in the shared link
   dashboard.ts    the end-to-end pipeline
-src/components/   UI
+src/design/       the ladder page, plus a design preview harness (design-preview.html)
+src/components/   setup page and coach console
 src/hooks/        live polling
-src/__tests__/    184 tests
+src/__tests__/    214 tests
 scripts/          demo data generator
 docs/             ranking rules, coach guide, traceability
 sample-data/      demo season + the original sample sheet

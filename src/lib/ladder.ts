@@ -291,7 +291,9 @@ export function buildLadder(input: BuildLadderInput): LadderResult {
   }
 
   const order = orderPlayers(players, matches, input, ratings, stats);
-  const previous = historicalOrder(input.matches, input, config.movementWindowDays);
+  // The past ladder must be built from the same countable matches as today's, or a
+  // rejected result would still move the arrows.
+  const previous = historicalOrder(matches, input, config.movementWindowDays);
   const pending = input.pendingChallengeKeys ?? new Set<string>();
 
   const standings: StandingRow[] = order.map((key, index) => {

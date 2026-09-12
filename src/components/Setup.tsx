@@ -60,8 +60,11 @@ export function Setup({ onSubmit, onTryDemo, initialValue = '', recalled, onResu
             <label htmlFor="sheet-url">Google Sheets link</label>
             <input
               id="sheet-url"
-              type="url"
+              // Not type="url": the browser would refuse a bare document id, which is a
+              // supported input, before this form ever saw it.
+              type="text"
               inputMode="url"
+              enterKeyHint="go"
               placeholder="https://docs.google.com/spreadsheets/d/…/edit"
               value={value}
               onChange={(e) => {

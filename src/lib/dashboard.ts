@@ -21,6 +21,7 @@ import {
   mapMatches,
   mapRoster,
   validateMapping,
+  type MatchField,
   type MatchMapping,
 } from './schema';
 import { pendingChallengeKeys, type OpenChallenge } from './challenge';
@@ -45,6 +46,8 @@ export interface Dashboard {
   boards: TeamBoard[];
   /** Every match that survived import, across all teams. */
   matches: Match[];
+  /** Challenges issued but not yet played, read from score-less rows plus any supplied. */
+  openChallenges: OpenChallenge[];
   roster: Map<string, RosterEntry>;
   displayNames: Map<string, string>;
   issues: DataIssue[];
@@ -53,6 +56,8 @@ export interface Dashboard {
   config: LadderConfig;
   /** True when no Team column or roster team data was found - a single combined ladder. */
   singleLadder: boolean;
+  /** True when any match carries a date, which movement arrows and Top Climber need. */
+  hasDates: boolean;
 }
 
 export interface BuildDashboardInput {
@@ -69,8 +74,16 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
   const issues: DataIssue[] = [];
   const table = toTable(parseCsv(input.matchesCsv));
 
+  // A saved override can outlive a column the coach later deleted from the sheet.
+  // Pointing past the last column would read every cell as blank, so treat it as unset
+  // and let validation say which field needs choosing again.
+  const override: Partial<MatchMapping> = {};
+  for (const [field, index] of Object.entries(input.mappingOverride ?? {}) as Array<[MatchField, number]>) {
+    override[field] = index < table.headers.length ? index : -1;
+  }
+
   const detected = detectMatchMapping(table);
-  const mapping: MatchMapping = { ...detected, ...(input.mappingOverride ?? {}) };
+  const mapping: MatchMapping = { ...detected, ...override };
 
   const missing = validateMapping(mapping);
   if (missing.length > 0) {
@@ -86,6 +99,7 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
     return {
       boards: [],
       matches: [],
+      openChallenges: [],
       roster: new Map(),
       displayNames: new Map(),
       issues,
@@ -93,6 +107,7 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
       table,
       config: input.config,
       singleLadder: true,
+      hasDates: false,
     };
   }
 
@@ -109,8 +124,10 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
   // --- Matches -------------------------------------------------------------
   const mapped = mapMatches(table, mapping, {
     strictScores: input.config.strictScoreValidation,
+    now: input.now,
   });
   issues.push(...mapped.issues);
+  const openChallenges = [...mapped.openChallenges, ...(input.openChallenges ?? [])];
 
   // Roster display names take priority - the roster is where the coach spells names
   // properly, while match rows are typed quickly courtside.
@@ -120,7 +137,11 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
   // A player who appears in results but not on the roster is worth flagging: it is
   // almost always a misspelling that would otherwise split one player into two.
   if (roster.size > 0) {
-    const unknown = [...new Set(mapped.matches.flatMap((m) => [m.playerA, m.playerB]))]
+    const named = [
+      ...mapped.matches.flatMap((m) => [m.playerA, m.playerB]),
+      ...mapped.openChallenges.flatMap((c) => [c.challengerKey, c.defenderKey]),
+    ];
+    const unknown = [...new Set(named)]
       .filter((key) => !roster.has(key))
       .map((key) => mapped.displayNames.get(key) ?? key);
     if (unknown.length > 0) {
@@ -128,7 +149,7 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
         severity: 'warning',
         code: 'unrostered-player',
         message:
-          'These players appear in match results but not on the Roster tab: ' +
+          'These players appear in the match sheet but not on the Roster tab: ' +
           unknown.join(', ') +
           '. Check for a spelling difference, or add them to the roster.',
       });
@@ -136,24 +157,32 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
   }
 
   if (mapped.matches.length === 0) {
+    // A new season with a roster or challenges but no results yet is a normal state,
+    // not a broken sheet.
+    const expected = roster.size > 0 || openChallenges.length > 0;
     issues.push({
-      severity: 'error',
+      severity: expected ? 'warning' : 'error',
       code: 'no-matches',
-      message: 'No usable match results were found in this sheet.',
+      message: expected
+        ? 'No match results yet. The ladder will fill in as scores are entered.'
+        : 'No usable match results were found in this sheet.',
     });
   }
 
   // --- Split into team ladders (PRD 6.1) -----------------------------------
   const teamsByPlayer = resolveTeams(mapped.matches, roster);
   const teams = listTeams(teamsByPlayer);
-  const pending = pendingChallengeKeys(input.openChallenges ?? []);
+  const pending = pendingChallengeKeys(openChallenges);
   const boards: TeamBoard[] = [];
 
   const buildBoard = (team: TeamId | null, teamMatches: Match[], label: string): TeamBoard => {
+    // Rostered players join the ladder their team resolves to - from the roster's Team
+    // column, or failing that from the matches they played. Filtering on the roster
+    // column alone would put every player without one on every ladder.
     const teamRoster =
       team === null
         ? roster
-        : new Map([...roster].filter(([, e]) => e.team === team || e.team === null));
+        : new Map([...roster].filter(([key]) => teamsByPlayer.get(key) === team));
 
     const ladder = buildLadder({
       matches: teamMatches,
@@ -190,17 +219,16 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
     // Anyone with no team assignment would otherwise vanish from every board.
     const assigned = new Set<string>();
     for (const board of boards) for (const row of board.standings) assigned.add(row.key);
-    const orphans = [...new Set(mapped.matches.flatMap((m) => [m.playerA, m.playerB]))].filter(
-      (key) => !assigned.has(key),
-    );
+    const everyone = [...mapped.matches.flatMap((m) => [m.playerA, m.playerB]), ...roster.keys()];
+    const orphans = [...new Set(everyone)].filter((key) => !assigned.has(key));
     if (orphans.length > 0) {
       issues.push({
         severity: 'warning',
         code: 'unassigned-team',
         message:
-          'These players have no team assigned, so they are not shown on either ladder: ' +
+          'These players have no team assigned, so they are not shown on any ladder: ' +
           orphans.map((k) => displayNames.get(k) ?? k).join(', ') +
-          '. Add a Team column, or list them on the Roster tab.',
+          '. Give them a Team on the Roster tab or in the match sheet.',
       });
     }
   }
@@ -208,6 +236,7 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
   return {
     boards,
     matches: mapped.matches,
+    openChallenges,
     roster,
     displayNames,
     issues,
@@ -215,6 +244,7 @@ export function buildDashboard(input: BuildDashboardInput): Dashboard {
     table,
     config: input.config,
     singleLadder: teams.length === 0,
+    hasDates: mapped.matches.some((m) => m.date !== null),
   };
 }
 

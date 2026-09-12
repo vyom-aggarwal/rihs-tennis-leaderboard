@@ -155,6 +155,40 @@ describe('TC-1.2 positions, movement and status (AC-1.2.1, AC-1.2.2, AC-1.2.3)',
     expect(boys.find((s) => s.displayName === 'Pedro Alvarez')!.displayStatus).toBe('Challenge Pending');
     expect(boys.find((s) => s.displayName === 'Jake Whitmore')!.displayStatus).toBe('Available');
   });
+
+  it('reads open challenges straight from score-less rows in the sheet (AC-1.2.3)', () => {
+    const d = demo();
+    expect(d.openChallenges.map((c) => [c.challengerKey, c.defenderKey])).toEqual([
+      [k('Johnny Park'), k('Ethan Cole')],
+      [k('Zara Haddad'), k('Ava Thompson')],
+    ]);
+    const all = d.boards.flatMap((b) => b.standings);
+    const status = (name: string) => all.find((s) => s.displayName === name)!.displayStatus;
+    expect(status('Johnny Park')).toBe('Challenge Pending');
+    expect(status('Ethan Cole')).toBe('Challenge Pending');
+    expect(status('Zara Haddad')).toBe('Challenge Pending');
+    expect(status('Ava Thompson')).toBe('Challenge Pending');
+    expect(status('Jake Whitmore')).toBe('Available');
+    // An open challenge is not a result: nobody's record changes.
+    expect(d.matches.some((m) => m.playerA === k('Johnny Park') && m.playerB === k('Ethan Cole') && m.date?.getDate() === 3)).toBe(false);
+  });
+
+  it('blocks challenging a player whose challenge from the sheet is still open (AC-2.1.2)', () => {
+    const d = demo();
+    const rows = d.boards[0]!.standings;
+    const johnny = rows.find((s) => s.displayName === 'Johnny Park')!;
+    const below = rows.find((s) => s.rank === johnny.rank + 1)!;
+    const option = challengeOptions({
+      challengerKey: below.key,
+      standings: rows,
+      matches: d.matches,
+      config,
+      openChallenges: d.openChallenges,
+      now: NOW,
+    }).find((o) => o.key === johnny.key)!;
+    expect(option.eligible).toBe(false);
+    expect(option.reason).toMatch(/open challenge/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -339,6 +373,45 @@ describe('data integrity', () => {
     const d = buildDashboard({ matchesCsv: 'Foo,Bar\n1,2', config, now: NOW });
     expect(d.issues.some((i) => i.code === 'mapping-incomplete')).toBe(true);
     expect(d.boards).toEqual([]);
+  });
+
+  it('puts a rostered player with no Team on no ladder, rather than on every ladder', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Team,Person 1,Person 2,Score\nGirls,Ana,Bea,6-1\nBoys,Cal,Dan,6-2',
+      rosterCsv: 'Name,Grade\nAna,11\nBea,10\nCal,12\nDan,9\nEve,9',
+      config,
+      now: NOW,
+    });
+    const girls = d.boards.find((b) => b.team === 'Girls')!.standings.map((s) => s.displayName);
+    const boys = d.boards.find((b) => b.team === 'Boys')!.standings.map((s) => s.displayName);
+    expect(girls.sort()).toEqual(['Ana', 'Bea']);
+    expect(boys.sort()).toEqual(['Cal', 'Dan']);
+    // Grades still arrive from the roster for players whose team came from their matches.
+    expect(d.boards.find((b) => b.team === 'Girls')!.standings.find((s) => s.displayName === 'Ana')!.grade).toBe(11);
+    // Eve has neither a Team nor a match to infer one from - and says so.
+    expect(d.issues.find((i) => i.code === 'unassigned-team')!.message).toContain('Eve');
+  });
+
+  it('treats a saved column mapping that points past the last column as unset', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\nJake,Marcus,6-1',
+      config,
+      now: NOW,
+      mappingOverride: { playerA: 9 },
+    });
+    expect(d.mapping.playerA).toBe(-1);
+    expect(d.issues.some((i) => i.code === 'mapping-incomplete')).toBe(true);
+  });
+
+  it('reads a new season with a roster but no results as a normal state, not an error', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\n',
+      rosterCsv: 'Name\nAna\nBea',
+      config,
+      now: NOW,
+    });
+    expect(d.issues.find((i) => i.code === 'no-matches')!.severity).toBe('warning');
+    expect(d.boards[0]!.standings.map((s) => s.displayName).sort()).toEqual(['Ana', 'Bea']);
   });
 
   it('flags a player in results who is missing from the roster', () => {

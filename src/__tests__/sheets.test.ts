@@ -43,12 +43,19 @@ describe('parseSheetUrl', () => {
 });
 
 describe('csvEndpoints', () => {
-  it('tries gviz, export and pub for a standard doc', () => {
+  it('tries export first, then gviz and pub, for a standard doc', () => {
+    // Export returns cells exactly as typed; gviz blanks cells whose type differs from
+    // the rest of their column, so it is only a fallback.
     const urls = csvEndpoints({ docId: DOC, pubId: null, gid: '0' });
     expect(urls).toHaveLength(3);
-    expect(urls[0]).toContain('gviz/tq?tqx=out:csv');
-    expect(urls[1]).toContain('export?format=csv');
+    expect(urls[0]).toContain('export?format=csv');
+    expect(urls[1]).toContain('gviz/tq?tqx=out:csv');
+    expect(urls[2]).toContain('/pub?output=csv');
     expect(urls.every((u) => u.includes('gid=0'))).toBe(true);
+  });
+
+  it('omits the gid when the link names no tab', () => {
+    expect(csvEndpoints({ docId: DOC, pubId: null, gid: null }).some((u) => u.includes('gid='))).toBe(false);
   });
 
   it('uses only the published endpoint for a publish-to-web id', () => {
@@ -128,6 +135,25 @@ describe('fetchSheetCsv', () => {
         }) as unknown as typeof fetch,
       }),
     ).rejects.toMatchObject({ kind: 'network' });
+  });
+
+  it('says the sheet was not found when every endpoint answers 404', async () => {
+    await expect(
+      fetchSheetCsv(ref, {
+        fetchImpl: (async () => ({ ok: false, status: 404, text: async () => '' }) as Response) as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ kind: 'not-found' });
+  });
+
+  it('names sharing as a possible cause when the request is blocked outright', async () => {
+    // A browser reports a blocked cross-origin redirect exactly like a dropped connection.
+    await expect(
+      fetchSheetCsv(ref, {
+        fetchImpl: (async () => {
+          throw new TypeError('Failed to fetch');
+        }) as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow(/Anyone with the link/);
   });
 
   it('skips an empty response and keeps trying', async () => {

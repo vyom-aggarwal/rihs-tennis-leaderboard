@@ -32,6 +32,8 @@ export interface OpenChallenge {
   challengerKey: string;
   defenderKey: string;
   createdAt: Date | null;
+  /** Sheet row the challenge was read from, when it came from the sheet. */
+  sheetRow?: number;
 }
 
 export interface EligibilityInput {

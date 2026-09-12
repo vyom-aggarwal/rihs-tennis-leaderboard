@@ -6,18 +6,22 @@ that implements it and the test that proves it.
 Status key: **Done** · **Partial** (works differently than specified — reason given) ·
 **Not built** (needs a backend — see [Deferred](#deferred-needs-a-backend))
 
+UI references are to `src/design/DrawSheetLeaderboard.tsx` (the ladder page) and
+`src/components/CoachPanel.tsx` (the coach console) unless stated otherwise. "Verified in
+browser" means checked in the running app at 1280px and 375px.
+
 ---
 
 ## US-1.1 · Switch between Boys and Girls ladders
 
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
-| AC-1.1.1 | Prominent Boys / Girls tabs | `App.tsx` tablist · `ladder.ts:listTeams` | `acceptance.test.ts` "produces separate Boys and Girls ladders" | Done |
-| AC-1.1.2 | Tab switch < 500ms, no reload | Both boards computed in one `buildDashboard` pass and held in memory; switching is a state change only | `acceptance.test.ts` "precomputes both boards in one pass" | Done |
-| AC-1.1.3 | High-contrast active tab | `styles.css` `.tab[aria-selected='true']` — solid fill, not a tint | Verified in browser | Done |
+| AC-1.1.1 | Prominent Boys / Girls tabs | Ladder tablist · `ladder.ts:listTeams` | `acceptance.test.ts` "produces separate Boys and Girls ladders" | Done |
+| AC-1.1.2 | Tab switch < 500ms, no reload | Both boards — standings and spotlight — computed in one `buildDashboard` pass and held in memory; switching is a state change that also updates `?ladder=` in the address bar | `acceptance.test.ts` "precomputes both boards in one pass" · verified in browser | Done |
+| AC-1.1.3 | High-contrast active tab | `draw-sheet.css` `.ds-tab[aria-selected='true']` — ink text, bold weight and a solid 2px ink underline; inactive tabs are muted | Verified in browser | Done |
 
-**TC-1.1.1** — passes. Both tabs visible, switching re-renders from memory with no network
-request, active tab takes a solid high-contrast fill.
+**TC-1.1.1** — passes. Both tabs visible; switching re-renders standings and spotlight from
+memory with no network request; the active tab takes the underline and the other loses it.
 
 ---
 
@@ -25,12 +29,12 @@ request, active tab takes a solid high-contrast fill.
 
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
-| AC-1.2.1 | Rank, name, avatar, grade, division, status, movement | `Standings.tsx` · `common.tsx` | `acceptance.test.ts` "supplies every column the standings table needs" | Done |
-| AC-1.2.2 | Movement calculated correctly | `ladder.ts:historicalOrder` — rebuilds the ladder as of 30 days ago | `ladder.test.ts` "computes movement against the ladder as it stood 30 days ago" | Done |
-| AC-1.2.3 | Distinct badges for Available / Challenge Pending / Injury Hold | `ladder.ts:displayStatusFor` · `.badge-*` | `ladder.test.ts` ×2 · `acceptance.test.ts` ×2 | Done |
+| AC-1.2.1 | Rank, name, avatar, grade, division, status, movement | Standings row: rank + movement, avatar (photo or initials), name, grade · division, Status column (under the name on phones) | `acceptance.test.ts` "supplies every column the standings table needs" · verified in browser | Done |
+| AC-1.2.2 | Movement calculated correctly | `ladder.ts:historicalOrder` — rebuilds the ladder as of 30 days ago from the same counted results | `ladder.test.ts` "computes movement against the ladder as it stood 30 days ago" · "builds the past ladder from counted results only" | Done |
+| AC-1.2.3 | Distinct badges for Available / Challenge Pending / Injury Hold | `ladder.ts:displayStatusFor` · `.ds-badge` (each clears WCAG AA, 5.5–6.2:1). Challenge Pending comes from score-less rows in the sheet (`schema.ts:mapMatches`) | `ladder.test.ts` ×2 · `acceptance.test.ts` "reads open challenges straight from score-less rows" · `schema.test.ts` "reads a row with two players and no score as an open challenge" | Done |
 
-**TC-1.2.1** — passes. All seven columns render; movement shows a green ↑2 for a player who
-climbed two places; the three badges are visually distinct in both themes.
+**TC-1.2.1** — passes. All seven fields render; movement shows a green ▲2 for a player who
+climbed two places; the three badges are visually distinct.
 
 > **Deviation, deliberate:** a sheet with no `Date` column shows **no** movement arrows
 > rather than "unchanged". There is no history to compare against, and a flat indicator
@@ -43,14 +47,14 @@ climbed two places; the three badges are visually distinct in both themes.
 
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
-| AC-2.1.1 | #8 may only challenge #7, #6, #5 | `challenge.ts:challengeOptions` | `challenge.test.ts` "offers exactly ranks 7, 6 and 5" · `acceptance.test.ts` | Done |
-| AC-2.1.2 | Blocked when either player has an open challenge | `challenge.ts:blockingReasonFor` | `challenge.test.ts` "blocks a challenge when either player already has one open" | Done |
+| AC-2.1.1 | #8 may only challenge #7, #6, #5 | `challenge.ts:challengeOptions` · "Can challenge" list in each player's expanded row | `challenge.test.ts` "offers exactly ranks 7, 6 and 5" · `acceptance.test.ts` | Done |
+| AC-2.1.2 | Blocked when either player has an open challenge | `challenge.ts:blockingReasonFor`, fed the open challenges read from the sheet | `challenge.test.ts` "blocks a challenge when either player already has one open" · `acceptance.test.ts` "blocks challenging a player whose challenge from the sheet is still open" | Done |
 | AC-2.1.3 | Defender receives in-app + email alert | — | — | **Not built** |
 
-**TC-2.1.1** — steps 1–2 pass and are visible in the player drawer: opening a rank-8 player
-lists ranks 5–7 as *Eligible* and ranks 1–4 as *Blocked* with the reason
-("Too far ahead — you may challenge up to 3 spots above you (ranks 5-7)"). Steps 3–4
-(submitting a challenge, notifying the defender) require a backend.
+**TC-2.1.1** — steps 1–2 pass in the expanded row: a rank-8 player sees ranks 5–7 marked
+*Eligible*, and ranks 1–4 summarized as out of challenge range. Step 3 passes as a sheet
+edit: the coach adds a row naming both players with the score blank, and both switch to
+*Challenge Pending*. Step 4 (notifying the defender) requires a backend.
 
 Beyond the specification: a **cooling-off period** blocks immediate rematches of the same
 pair, which is standard on USTA ladders and prevents one player repeatedly re-challenging
@@ -63,7 +67,7 @@ the same opponent.
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
 | AC-2.2.1 | Accept valid set scores, reject invalid | `score.ts:validateSet` / `validateScore` | `score.test.ts` ×23 | Done |
-| AC-2.2.2 | Submitted scores enter a Pending queue | `Status` column → `CoachPanel` "Awaiting your verification" | `acceptance.test.ts` "holds pending results out of the ladder" | Partial |
+| AC-2.2.2 | Submitted scores enter a Pending queue | `Status` column (text or checkbox) → coach console "Awaiting your verification" | `acceptance.test.ts` "holds pending results out of the ladder" · `schema.test.ts` "never counts an unticked checkbox or a No as verified" | Partial |
 | AC-2.2.3 | On approval, ranks adjust and movement updates | `ladder.ts:applyChallengeResult` | `ladder.test.ts` ×5 · `acceptance.test.ts` | Done |
 
 **TC-2.2.1** — all four steps covered:
@@ -72,7 +76,8 @@ the same opponent.
 2. `6-4, 7-5` is accepted.
 3. Pending rows appear in the coach console verification queue with sheet row numbers.
 4. `applyChallengeResult(['p1'…'p8'], 'p8', 'p6', true)` puts the challenger at rank 6 and
-   the defender at rank 7, leaving ranks 1–5 untouched.
+   the defender at rank 7, leaving ranks 1–5 untouched. Typing the score into an open
+   challenge's row also resets both players to *Available*.
 
 > **Partial, and why:** approval is done by changing the `Status` cell to `Verified` in the
 > sheet, not by clicking Approve in the app. A static page cannot write to a Google Sheet
@@ -85,7 +90,7 @@ the same opponent.
 
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
-| AC-3.1.1 | Coach reorders players | Roster `Rank` column + challenge ladder mode | `ladder.test.ts` "starts from the coach seeds" | Partial |
+| AC-3.1.1 | Coach reorders players | Roster `Rank` column + challenge ladder mode; Roster tab connected from the coach console | `ladder.test.ts` "starts from the coach seeds" | Partial |
 | AC-3.1.2 | Injured players bypassed, history kept | `schema.ts:parseActiveStatus` · `challenge.ts` | `ladder.test.ts` · `challenge.test.ts` · `acceptance.test.ts` | Done |
 | AC-3.1.3 | Audit trail with coach ID, date, reason | — | — | **Not built** |
 
@@ -101,14 +106,14 @@ what and when in the meantime.
 | PRD § | Requirement | Implementation | Status |
 |---|---|---|---|
 | 6.1 | Dual ladder standings | `dashboard.ts` per-team boards | Done |
-| 6.1 | Rank, movement, status badges | `Standings.tsx` | Done |
-| 6.2 | Top 3 spotlight cards | `Spotlight.tsx` | Done |
-| 6.2 | Most Wins | `leaders.ts:mostWins` | Done |
-| 6.2 | Longest Active Streak | `leaders.ts:longestActiveStreak` | Done |
-| 6.2 | Top Climber, 30 days | `leaders.ts:topClimber` | Done |
-| 6.3 | Challenge workflow | Eligibility engine built; submission needs a backend | Partial |
-| 7 | Mobile-first responsive | Table reflows to cards under 720px | Done |
-| 7 | Under 2s on 4G | ~73 KB gzipped total; cache-first repeat loads | Done |
+| 6.1 | Rank, movement, status badges | Standings row and Status column | Done |
+| 6.2 | Top 3 spotlight cards | `Podium` in `DrawSheetLeaderboard.tsx` | Done |
+| 6.2 | Most Wins | `leaders.ts:mostWins` · `Leaderboards` | Done |
+| 6.2 | Longest Active Streak | `leaders.ts:longestActiveStreak` · `Leaderboards` | Done |
+| 6.2 | Top Climber, 30 days | `leaders.ts:topClimber` · `Leaderboards` | Done |
+| 6.3 | Challenge workflow | Eligibility engine and open-challenge tracking from sheet rows; in-app submission and alerts need a backend | Partial |
+| 7 | Mobile-first responsive | Under 640px the status badge moves under the name and the spotlight and leaderboards stack; no horizontal scrolling at 375px (verified in browser) | Done |
+| 7 | Under 2s on 4G | ~78 KB gzipped HTML, CSS and JS; web fonts load without blocking first paint; cache-first repeat loads | Done |
 | 7 | Student data privacy | No server, no data collection; guidance in the coach guide | Done |
 | 8 | PLAYER entity | `RosterEntry` in `types.ts` | Done |
 | 8 | MATCH_RESULT entity | `Match` in `types.ts` | Done |
@@ -121,7 +126,7 @@ what and when in the meantime.
 |---|---|---|
 | DEV-101 Dual ladder navigation | Done | |
 | DEV-102 Standings table and badges | Done | |
-| DEV-103 Challenge modal UI | Partial | Eligibility list built into the player drawer; no submit action |
+| DEV-103 Challenge modal UI | Partial | Eligibility list in each player's expanded row; challenges are recorded as score-less sheet rows rather than submitted from a form |
 | DEV-201 Challenge rules validation API | Done as a library | `challenge.ts:canChallenge` — the rules, minus the HTTP endpoint |
 | DEV-202 Notification service | Not built | Needs a backend |
 | DEV-203 Score validation and submission | Partial | Validation done and tested; submission is a sheet edit |
@@ -160,16 +165,17 @@ new accounts — students sign in with the Google accounts the school already is
 ## Test summary
 
 ```
- 8 files · 184 tests · all passing
+ 9 files · 214 tests · all passing
 
  score.test.ts        23   parsing, validation, tiebreak rules
  rating.test.ts       20   NTRP calibration, convergence, determinism
- ladder.test.ts       26   ordering, tiebreakers, movement, both modes
+ ladder.test.ts       27   ordering, tiebreakers, movement, both modes
  challenge.test.ts    20   eligibility, blocking, cooling-off
- schema.test.ts       29   column detection, coercion, name unification
+ schema.test.ts       42   column detection, coercion, dates, open challenges
  csv.test.ts          12   RFC 4180 edge cases
- sheets.test.ts       18   URL parsing, endpoint fallback, error kinds
- acceptance.test.ts   36   QA test cases + data integrity invariants
+ sheets.test.ts       21   URL parsing, endpoint order, error kinds
+ config.test.ts        8   settings and column mapping in shared links
+ acceptance.test.ts   41   QA test cases + data integrity invariants
 ```
 
 Run with `npm test`.

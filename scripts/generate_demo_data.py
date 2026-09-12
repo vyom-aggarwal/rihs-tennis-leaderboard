@@ -205,6 +205,26 @@ def main() -> None:
         r["Status"] = "Pending"
     rows[-1]["Notes"] = "Court 3, finished after dark"
 
+    # Two challenges issued but not yet played: both players named, score left blank.
+    # They put "Challenge Pending" on both sides and block other challenges, so that
+    # state is visible in the demo. Each pair is within three spots and outside the
+    # seven-day cooling-off period on the demo's "today" (2026-09-04).
+    for team, challenger, defender in (
+        ("Boys", "Johnny Park", "Ethan Cole"),
+        ("Girls", "Zara Haddad", "Ava Thompson"),
+    ):
+        rows.append(
+            {
+                "Date": "2026-09-03",
+                "Team": team,
+                "Person 1": challenger,
+                "Person 2": defender,
+                "Score": "",
+                "Status": "",
+                "Notes": "Challenge issued",
+            }
+        )
+
     matches_path = OUT / "demo-matches.csv"
     with matches_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["Date", "Team", "Person 1", "Person 2", "Score", "Status", "Notes"])
@@ -218,12 +238,12 @@ def main() -> None:
         for name, team, grade, division, _, _, status in PLAYERS:
             w.writerow([name, team, grade, division, status])
 
-    played = sum(1 for _ in rows)
-    print(f"Wrote {matches_path.name}: {played} matches")
+    results = [r for r in rows if r["Score"]]
+    print(f"Wrote {matches_path.name}: {len(results)} matches, {len(rows) - len(results)} open challenges")
     print(f"Wrote {roster_path.name}: {len(PLAYERS)} players")
 
     counts: dict[str, int] = {}
-    for r in rows:
+    for r in results:
         for key in ("Person 1", "Person 2"):
             counts[r[key]] = counts.get(r[key], 0) + 1
     thin = {n: c for n, c in counts.items() if c < 3}

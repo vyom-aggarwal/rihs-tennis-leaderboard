@@ -205,6 +205,27 @@ describe('buildLadder', () => {
     expect(ana.previousRank!).toBeGreaterThan(ana.rank);
   });
 
+  it('builds the past ladder from counted results only, so a rejected result moves no arrows', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    const matches = [
+      match('Bea', 'Ana', '6-0', { date: daysAgo(60, now) }),
+      // Three results the coach rejected. Counted in the past ladder, they would put Ana
+      // ahead 30 days ago and show her dropping a place she never held.
+      match('Ana', 'Bea', '6-0', { date: daysAgo(45, now), approval: 'Rejected' }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(44, now), approval: 'Rejected' }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(43, now), approval: 'Rejected' }),
+    ];
+    const result = buildLadder({
+      matches,
+      roster: new Map(),
+      displayNames: names('Ana', 'Bea'),
+      config,
+      now,
+    });
+    expect(order(result.standings)).toEqual(['Bea', 'Ana']);
+    for (const row of result.standings) expect(row.movement).toBe(0);
+  });
+
   it('reports no movement at all when the sheet has no dates', () => {
     const result = buildLadder({
       matches: [match('Ana', 'Bea', '6-1'), match('Bea', 'Cat', '6-2')],

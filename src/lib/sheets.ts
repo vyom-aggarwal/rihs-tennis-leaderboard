@@ -92,16 +92,15 @@ export function csvEndpoints(ref: SheetRef): string[] {
     return urls;
   }
 
-  // gviz is the most permissive endpoint for "anyone with the link can view" sheets.
+  // The export endpoint returns every cell exactly as the coach typed it, so it goes
+  // first even though its redirect costs one extra round trip.
+  urls.push('https://docs.google.com/spreadsheets/d/' + ref.docId + '/export?format=csv' + gidParam);
+  // gviz is faster but runs the sheet through Google's query engine, which guesses one
+  // type per column and blanks out cells of the minority type - a "Freshman" in a
+  // mostly-numeric Grade column, or a "ret." among numeric scores, would silently vanish.
+  // It stays as a fallback because it is sometimes reachable when export is not.
   urls.push(
     'https://docs.google.com/spreadsheets/d/' + ref.docId + '/gviz/tq?tqx=out:csv' + gidParam,
-  );
-  // The plain export endpoint works for link-shared sheets and returns cleaner CSV.
-  urls.push(
-    'https://docs.google.com/spreadsheets/d/' +
-      ref.docId +
-      '/export?format=csv' +
-      (ref.gid ? '&gid=' + ref.gid : ''),
   );
   // Finally the publish-to-web endpoint, in case the coach published the doc id itself.
   urls.push('https://docs.google.com/spreadsheets/d/' + ref.docId + '/pub?output=csv' + gidParam);
@@ -135,8 +134,10 @@ export async function fetchSheetCsv(ref: SheetRef, options: FetchOptions = {}): 
 
   const attempts: string[] = [];
   let sawHtml = false;
+  let notFound = 0;
+  const endpoints = csvEndpoints(ref);
 
-  for (const url of csvEndpoints(ref)) {
+  for (const url of endpoints) {
     // Cache-bust so a teammate refreshing mid-match is never served a stale copy by
     // the browser or an intermediate CDN.
     const busted = url + (url.includes('?') ? '&' : '?') + '_cb=' + Date.now();
@@ -150,6 +151,7 @@ export async function fetchSheetCsv(ref: SheetRef, options: FetchOptions = {}): 
       if (!res.ok) {
         attempts.push(endpointLabel(url) + ' -> HTTP ' + res.status);
         if (res.status === 401 || res.status === 403) sawHtml = true;
+        if (res.status === 404) notFound++;
         continue;
       }
 
@@ -179,9 +181,24 @@ export async function fetchSheetCsv(ref: SheetRef, options: FetchOptions = {}): 
       attempts,
     );
   }
+  if (notFound === endpoints.length) {
+    throw new SheetError(
+      'not-found',
+      'Google could not find this sheet. Check that the link is complete, that the sheet has ' +
+        'not been deleted, and that sharing is set to "Anyone with the link" -> Viewer.',
+      attempts,
+    );
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new SheetError('network', 'You appear to be offline. The ladder will update when you reconnect.', attempts);
+  }
+  // A browser reports a blocked cross-origin redirect (which is what Google sends for a
+  // sheet that is not shared publicly) exactly like a dropped connection, so both causes
+  // have to be named.
   throw new SheetError(
     'network',
-    'Could not reach the sheet. Check the link and your connection, then try again.',
+    'Could not read the sheet. Check your connection, and that the sheet is shared as ' +
+      '"Anyone with the link" -> Viewer, then try again.',
     attempts,
   );
 }

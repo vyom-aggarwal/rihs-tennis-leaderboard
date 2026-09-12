@@ -39,7 +39,7 @@ Add any of these columns and the dashboard picks them up automatically:
 | `Date` | Movement arrows (↑ ↓) and the Top Climber board |
 | `Team` | Separate **Boys Ladder** and **Girls Ladder** tabs |
 | `Score` | One column like `6-4, 7-5` instead of two number columns |
-| `Status` | A verification workflow — `Pending` / `Verified` / `Rejected` |
+| `Status` | A verification workflow — `Pending` / `Verified` / `Rejected`, or a checkbox (unticked = pending) |
 | `Winner` | An explicit winner, if your scores are ever recorded loser-first |
 | `Notes` | Anything you want; shown only to you |
 
@@ -52,7 +52,8 @@ Example:
 
 **Column names are flexible.** `Player 1`, `Challenger`, `Home`, `P1` and `Person 1` all
 work. If anything is read wrong, fix it in **Coach console → Column mapping** — no need to
-rename anything in your sheet.
+rename anything in your sheet. Your choices are saved into the team link, so copy the team
+link again afterwards.
 
 ### Optional: a Roster tab
 
@@ -67,9 +68,16 @@ Add a second tab called `Roster` for player details:
   badge and cannot be challenged, while keeping their full match history.
 - **Rank** — only needed for challenge ladder mode.
 - **Grade** accepts `9`–`12` or `Freshman`–`Senior`.
+- **Photo** — optional. A direct `https://` link to an image; players without one show
+  their initials.
 
-To connect the Roster tab, open it in Google Sheets, copy the `gid=` number from the
-address bar, and add `&roster=<that number>` to your dashboard link.
+Players listed here with no `Team` are placed on the ladder of the team they play matches
+for. A rostered player with no Team who has not played yet is not shown on any ladder, and
+Data health lists them so you can fill it in.
+
+To connect the Roster tab: click that tab in Google Sheets, copy the address bar (it ends
+in `gid=` and a number), and paste it into **Coach console → Roster tab**. Then copy the
+team link again.
 
 ---
 
@@ -114,13 +122,27 @@ Also copy **Your coach link** and bookmark it. That one reopens the coach consol
 
 ## Day-to-day
 
+### Recording a challenge
+When a player issues a challenge, add a row with the challenger in the first player column,
+the defender in the second, the date, and **leave the score blank**:
+
+| Date | Team | Person 1 | Person 2 | Score | Status |
+|---|---|---|---|---|---|
+| 2026-09-03 | Boys | Johnny Park | Ethan Cole | | |
+
+Both players show **Challenge Pending**, and neither can be challenged by anyone else until
+it is resolved. When the match is played, type the score into that same row. To withdraw a
+challenge, set its Status to `Cancelled`.
+
 ### Recording a result
-Type it into the sheet. The ladder updates within 30 seconds on every device watching.
+Type it into the sheet. The ladder updates within 30 seconds on every device that has the
+page open.
 
 ### Verifying results
 Add a `Status` column. Put `Pending` on new results, change it to `Verified` once you have
-confirmed the score. In **Coach console → Ladder rules**, turn off *Count results marked
-Pending* if you want unverified results held out of the ladder entirely.
+confirmed the score. A checkbox column works too: unticked means pending. In
+**Coach console → Ladder rules**, turn off *Count results marked Pending* if you want
+unverified results held out of the ladder entirely.
 
 Pending results appear in **Awaiting your verification** in the console, with their sheet
 row numbers.
@@ -145,11 +167,16 @@ you share, so your team sees the ladder under the same rules you set.
 | What you see | What it means |
 |---|---|
 | **3.87** | Team rating. Higher is stronger. See [RANKING_RULES.md](RANKING_RULES.md). |
-| **Provisional** | Fewer than 3 matches — the rating is still settling. |
-| **↑2 / ↓1** | Places gained or lost over the last 30 days. |
+| **prov.** | Fewer than 3 matches — the rating is still settling. |
+| **—** (rating) | The player is on the roster but has not played a match yet. |
+| **▲2 / ▼1** | Places gained or lost over the last 30 days. **·** means unchanged. |
 | **–** (movement) | No ranking history yet, or the sheet has no dates. |
-| **107–54 66%** | Games won–lost, and games-won percentage. |
-| **W W L W W** | The last five results, oldest first. |
+| **Available** | Can challenge and be challenged. |
+| **Challenge Pending** | Has an open challenge — a row with no score yet. |
+| **Injury Hold** | Marked Injured on the Roster tab; cannot be challenged. |
+
+Tap any player to see their win and games-won percentages, current streak, recent
+matches, and exactly who they may challenge — with the reason next to anyone they can't.
 
 ### Why does a player with a worse record rank higher?
 
@@ -164,11 +191,19 @@ high on very little evidence. Their position firms up as they play.
 
 ## Troubleshooting
 
-**"The sheet is not readable publicly"**
-Sharing is not set to *Anyone with the link → Viewer*. Redo step 2.
+**"The sheet is not readable publicly"** or **"Could not read the sheet"**
+Sharing is probably not set to *Anyone with the link → Viewer*. Redo step 2. If sharing is
+right, check your connection.
 
-**"The columns in this sheet were not recognised"**
+**"Google could not find this sheet"**
+The link is incomplete or the sheet was deleted. Copy the address from Google Sheets again.
+
+**"The columns in this sheet were not recognized"**
 Open **Coach console → Column mapping** and set the player and score columns by hand.
+
+**"The Roster tab could not be read"**
+The ladder still works without it. Check that the Roster tab still exists, and re-paste its
+link in **Coach console → Roster tab**.
 
 **A player appears twice**
 Two spellings of one name. The app matches names ignoring case and spacing, but
@@ -183,7 +218,12 @@ The app will say so. It means two sets of players have never played anyone from 
 group, so their relative order is not established by results. One cross-group match fixes it.
 
 **Someone is missing from both ladders**
-They have no `Team` value. Add a `Team` column, or list them on the Roster tab.
+They have no `Team` value. Give them one on the Roster tab, or in a `Team` column on their
+match rows. Data health names everyone affected.
+
+**A date shows a warning**
+Dates in the future almost always mean a mistyped year. Dates written without a year
+(`9/3`) are read as the nearest such day.
 
 ---
 

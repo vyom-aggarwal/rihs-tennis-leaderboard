@@ -11,6 +11,7 @@
  * that cannot be corrected is worse than no auto-detection at all.
  */
 
+import type { OpenChallenge } from './challenge';
 import type { CsvTable } from './csv';
 import { parseGameColumns, parseScoreString, validateScore } from './score';
 import type {
@@ -184,28 +185,67 @@ function spellingQuality(name: string): number {
 // Value coercion
 // ---------------------------------------------------------------------------
 
-export function parseDate(value: string | undefined): Date | null {
+/** A calendar date, or null when the parts do not name a real day (Feb 30, month 13). */
+function calendarDate(year: number, month: number, day: number): Date | null {
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return d;
+}
+
+/**
+ * A date typed without a year ("9/3", "Sep 3") means the nearest such day to today, so
+ * a December result read in January lands in the right season.
+ */
+function nearestYear(month: number, day: number, reference: Date): Date | null {
+  const year = reference.getFullYear();
+  const candidate = calendarDate(year, month, day);
+  if (!candidate) return null;
+  const halfYear = 183 * 86_400_000;
+  const diff = candidate.getTime() - reference.getTime();
+  if (diff > halfYear) return calendarDate(year - 1, month, day);
+  if (diff < -halfYear) return calendarDate(year + 1, month, day);
+  return candidate;
+}
+
+/** Google Sheets serial day numbers count from 1899-12-30. */
+const SHEETS_EPOCH = { year: 1899, month: 12, day: 30 };
+
+export function parseDate(value: string | undefined, reference: Date = new Date()): Date | null {
   if (isBlank(value)) return null;
   const text = value!.trim();
 
   // Prefer explicit ISO, which sorts and parses unambiguously.
   const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) {
-    const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-    return Number.isNaN(d.getTime()) ? null : d;
+  if (iso) return calendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  // A date cell formatted as a plain number exports as its serial day count. Without
+  // this, `new Date("46268")` would read it as the year 46268.
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const serial = Math.floor(Number(text));
+    if (serial < 20000 || serial > 80000) return null; // 1954..2119 - anything else is not a date
+    return new Date(SHEETS_EPOCH.year, SHEETS_EPOCH.month - 1, SHEETS_EPOCH.day + serial);
   }
 
-  // US-style M/D/YYYY, which is what Google Sheets exports for US locales.
-  const us = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
-  if (us) {
-    let year = Number(us[3]);
+  // M/D/YYYY, which is what Google Sheets exports for US locales. A first number above
+  // 12 can only be a day, so D/M/YYYY sheets from other locales still read correctly
+  // instead of rolling "25/12" over into the following year.
+  const slash = text.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?(?![\d/-])/);
+  if (slash) {
+    let month = Number(slash[1]);
+    let day = Number(slash[2]);
+    if (month > 12 && day <= 12) [month, day] = [day, month];
+    if (!slash[3]) return nearestYear(month, day, reference);
+    let year = Number(slash[3]);
     if (year < 100) year += year < 70 ? 2000 : 1900;
-    const d = new Date(year, Number(us[1]) - 1, Number(us[2]));
-    return Number.isNaN(d.getTime()) ? null : d;
+    return calendarDate(year, month, day);
   }
 
   const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (Number.isNaN(parsed.getTime())) return null;
+  // Engines fill a missing year with 2001 ("Sep 3" -> 2001-09-03), which would make a
+  // current result look decades old.
+  if (!/\d{4}/.test(text)) return nearestYear(parsed.getMonth() + 1, parsed.getDate(), reference);
+  return parsed;
 }
 
 /** Map any of the ways a coach writes a team onto a stable label. */
@@ -241,17 +281,23 @@ export function parseGrade(value: string | undefined): GradeLevel {
 export function parseActiveStatus(value: string | undefined): ActiveStatus {
   if (isBlank(value)) return 'Active';
   const t = value!.trim().toLowerCase();
-  if (/injur|hurt|hold|out/.test(t)) return 'Injured';
-  if (/inactive|quit|left|removed|off|suspend/.test(t)) return 'Inactive';
+  // Whole words only: a substring test would put "Active without restrictions" on
+  // injury hold because it contains "out".
+  if (/\binjur|\bhurt\b|\bhold\b|\bout\b/.test(t)) return 'Injured';
+  if (/\binactive\b|\bnot active\b|\bquit\b|\bleft\b|\bremoved\b|\boff\b|\bsuspend/.test(t)) {
+    return 'Inactive';
+  }
   return 'Active';
 }
 
 export function parseApproval(value: string | undefined): ApprovalStatus {
   if (isBlank(value)) return 'Verified'; // no status column => the coach's sheet is the record
   const t = value!.trim().toLowerCase();
-  if (/reject|denied|void|invalid|disput/.test(t)) return 'Rejected';
-  if (/pend|await|review|unverified|submitted|new/.test(t)) return 'Pending';
-  if (/verif|approv|confirm|final|ok|yes|true|done/.test(t)) return 'Verified';
+  if (/reject|denied|declin|void|invalid|disput|cancel|withdr/.test(t)) return 'Rejected';
+  // An unticked "Verified" checkbox exports as FALSE, and "No" in an "Approved" column
+  // means exactly that. Neither may count as a verified result.
+  if (/^(no|n|false|0|unchecked)$/.test(t) || /\bnot\b/.test(t)) return 'Pending';
+  if (/pend|await|review|unverified|submitted|\bnew\b/.test(t)) return 'Pending';
   return 'Verified';
 }
 
@@ -266,6 +312,8 @@ function parseBoolish(value: string | undefined): boolean {
 
 export interface MappedMatches {
   matches: Match[];
+  /** Rows naming two players with no score yet - issued challenges awaiting a result. */
+  openChallenges: OpenChallenge[];
   issues: DataIssue[];
   /** Display name chosen for each player key (the most frequent spelling seen). */
   displayNames: Map<string, string>;
@@ -280,11 +328,13 @@ export interface MappedMatches {
 export function mapMatches(
   table: CsvTable,
   mapping: MatchMapping,
-  options: { strictScores: boolean },
+  options: { strictScores: boolean; now?: Date },
 ): MappedMatches {
   const matches: Match[] = [];
+  const openChallenges: OpenChallenge[] = [];
   const issues: DataIssue[] = [];
   const nameCounts = new Map<string, Map<string, number>>();
+  const reference = options.now ?? new Date();
 
   const cell = (row: string[], index: number): string | undefined =>
     index >= 0 ? row[index] : undefined;
@@ -332,11 +382,39 @@ export function mapMatches(
       return;
     }
 
-    // Score: prefer a summary string when present, else the two numeric columns.
     const summary = cell(row, mapping.scoreSummary);
+    const scoreCellA = cell(row, mapping.scoreA);
+    const scoreCellB = cell(row, mapping.scoreB);
+    const winnerCell = cell(row, mapping.winner);
+
+    const dateCell = cell(row, mapping.date);
+    const date = parseDate(dateCell, reference);
+    if (!isBlank(dateCell) && date === null) {
+      issues.push({
+        severity: 'warning',
+        code: 'bad-date',
+        sheetRow,
+        message: 'Could not read the date "' + dateCell!.trim() + '". This match is treated as undated.',
+        context: displayA + ' vs ' + displayB,
+      });
+    }
+
+    // Two names and no result at all is a challenge that has been issued but not yet
+    // played - the only way a read-only sheet can record one. It gives both players the
+    // "Challenge Pending" badge until a score is typed into the same row.
+    if (isBlank(summary) && isBlank(scoreCellA) && isBlank(scoreCellB) && isBlank(winnerCell)) {
+      if (parseApproval(cell(row, mapping.approval)) !== 'Rejected') {
+        noteName(keyA, displayA);
+        noteName(keyB, displayB);
+        openChallenges.push({ challengerKey: keyA, defenderKey: keyB, createdAt: date, sheetRow });
+      }
+      return;
+    }
+
+    // Score: prefer a summary string when present, else the two numeric columns.
     const score = !isBlank(summary)
       ? parseScoreString(summary!)
-      : parseGameColumns(cell(row, mapping.scoreA), cell(row, mapping.scoreB));
+      : parseGameColumns(scoreCellA, scoreCellB);
 
     if (!score) {
       issues.push({
@@ -375,7 +453,6 @@ export function mapMatches(
     // An explicit Winner column overrides the score, but a disagreement is reported -
     // it almost always means the score columns are the wrong way round.
     let winner = score.winner!;
-    const winnerCell = cell(row, mapping.winner);
     if (!isBlank(winnerCell)) {
       const wk = playerKey(winnerCell!);
       if (wk === keyA || wk === keyB) {
@@ -409,14 +486,15 @@ export function mapMatches(
       }
     }
 
-    const dateCell = cell(row, mapping.date);
-    const date = parseDate(dateCell);
-    if (!isBlank(dateCell) && date === null) {
+    // A result cannot have been played in the future; this is nearly always a mistyped
+    // year, which would otherwise distort recency weighting and the movement arrows.
+    if (date && date.getTime() - reference.getTime() > 86_400_000) {
       issues.push({
         severity: 'warning',
-        code: 'bad-date',
+        code: 'future-date',
         sheetRow,
-        message: 'Could not read the date "' + dateCell!.trim() + '". This match is treated as undated.',
+        message:
+          'The date "' + dateCell!.trim() + '" is in the future - check the year. The match still counts.',
         context: displayA + ' vs ' + displayB,
       });
     }
@@ -454,7 +532,7 @@ export function mapMatches(
     displayNames.set(key, best ? best[0] : key);
   }
 
-  return { matches, issues, displayNames };
+  return { matches, openChallenges, issues, displayNames };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 /**
- * Coach console: share links, ladder rules, column mapping, and the verification queue.
+ * Coach console: share links, the roster tab, ladder rules, column mapping, open
+ * challenges and the verification queue.
  *
  * SECURITY NOTE, stated plainly because it matters: coach mode is a URL flag. It hides
  * or shows UI, and it is not authentication. The real access control is Google's own
@@ -9,9 +10,11 @@
  */
 
 import { useState } from 'react';
+import type { OpenChallenge } from '../lib/challenge';
 import type { MatchField, MatchMapping } from '../lib/schema';
 import { formatScore } from '../lib/score';
 import { sortIssues } from '../lib/dashboard';
+import { parseSheetUrl, SheetError } from '../lib/sheets';
 import type { CsvTable } from '../lib/csv';
 import type { DataIssue, LadderConfig, Match } from '../lib/types';
 import { formatDate } from './common';
@@ -25,9 +28,16 @@ const FIELD_LABELS: Array<{ field: MatchField; label: string; hint: string }> = 
   { field: 'winner', label: 'Winner', hint: 'Optional. Overrides the score if they disagree.' },
   { field: 'date', label: 'Date', hint: 'Optional, but needed for movement arrows and Top Climber.' },
   { field: 'team', label: 'Team', hint: 'Optional. Values like Boys / Girls split the ladders.' },
-  { field: 'approval', label: 'Approval status', hint: 'Optional. Pending / Verified / Rejected.' },
+  { field: 'approval', label: 'Approval status', hint: 'Optional. Pending / Verified / Rejected, or a checkbox (unticked = pending).' },
   { field: 'notes', label: 'Notes', hint: 'Optional. Shown to you only.' },
 ];
+
+/** Keep a typed number inside the same bounds the shared link accepts. */
+function bounded(raw: string, lo: number, hi: number, fallback: number): number {
+  const n = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -51,6 +61,84 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
+function RosterTabField({
+  sheetId,
+  matchesGid,
+  rosterGid,
+  onChange,
+}: {
+  sheetId: string;
+  matchesGid: string | null;
+  rosterGid: string | null;
+  onChange: (gid: string | null) => void;
+}) {
+  const [value, setValue] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const apply = (gid: string) => {
+    if (gid === (matchesGid ?? '0')) {
+      setProblem('That is the tab with your match results. Open the Roster tab and copy its address instead.');
+      return;
+    }
+    onChange(gid);
+    setValue('');
+    setProblem(null);
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = value.trim();
+    if (/^\d+$/.test(text)) return apply(text);
+    try {
+      const ref = parseSheetUrl(text);
+      if ((ref.pubId ? 'e/' + ref.pubId : ref.docId) !== sheetId) {
+        setProblem('That link is to a different spreadsheet. The Roster tab must be a tab in the same spreadsheet as your match results.');
+        return;
+      }
+      if (!ref.gid) {
+        setProblem('That link does not say which tab to use. Click the Roster tab in Google Sheets first, then copy the address — it ends in "gid=" and a number.');
+        return;
+      }
+      apply(ref.gid);
+    } catch (err) {
+      setProblem(err instanceof SheetError ? err.message : 'That link could not be read.');
+    }
+  };
+
+  return (
+    <form onSubmit={submit}>
+      <div className="field">
+        <label htmlFor="roster-link">{rosterGid ? 'Replace the Roster tab link' : 'Roster tab link'}</label>
+        <div className="row" style={{ flexWrap: 'nowrap' }}>
+          <input
+            id="roster-link"
+            type="text"
+            inputMode="url"
+            placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=…"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setProblem(null);
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={problem ? true : undefined}
+            aria-describedby={problem ? 'roster-problem' : undefined}
+          />
+          <button type="submit" className="btn btn-sm" disabled={!value.trim()}>
+            Use tab
+          </button>
+        </div>
+        {problem && (
+          <div id="roster-problem" className="notice notice-error" style={{ marginTop: 8, marginBottom: 0 }}>
+            {problem}
+          </div>
+        )}
+      </div>
+    </form>
+  );
+}
+
 interface Props {
   table: CsvTable;
   mapping: MatchMapping;
@@ -59,10 +147,18 @@ interface Props {
   onConfigChange: (patch: Partial<LadderConfig>) => void;
   issues: DataIssue[];
   matches: Match[];
+  openChallenges: OpenChallenge[];
   displayNames: Map<string, string>;
   teamUrl: string;
   coachLinkUrl: string;
-  sheetUrl: string;
+  /** Null in the demo, which has no sheet to open. */
+  sheetUrl: string | null;
+  sheetId: string;
+  matchesGid: string | null;
+  isDemo: boolean;
+  rosterGid: string | null;
+  rosterError: string | null;
+  onRosterGidChange: (gid: string | null) => void;
   refreshSeconds: number;
   onRefreshSecondsChange: (seconds: number) => void;
 }
@@ -75,16 +171,24 @@ export function CoachPanel({
   onConfigChange,
   issues,
   matches,
+  openChallenges,
   displayNames,
   teamUrl,
   coachLinkUrl,
   sheetUrl,
+  sheetId,
+  matchesGid,
+  isDemo,
+  rosterGid,
+  rosterError,
+  onRosterGidChange,
   refreshSeconds,
   onRefreshSecondsChange,
 }: Props) {
   const sorted = sortIssues(issues);
   const errors = sorted.filter((i) => i.severity === 'error');
   const warnings = sorted.filter((i) => i.severity === 'warning');
+  const skippedRows = errors.filter((i) => i.sheetRow !== undefined).length;
   const pending = matches.filter((m) => m.approval === 'Pending');
   const nameFor = (key: string) => displayNames.get(key) ?? key;
 
@@ -95,13 +199,16 @@ export function CoachPanel({
         <h3>Share with the team</h3>
         <p className="panel-note">
           Send players, parents and administrators this link. It is read-only and always shows the
-          current ladder.
+          current ladder, under the rules and column settings you choose below.
         </p>
         <div className="field">
           <label htmlFor="team-link">Team link</label>
           <div className="row" style={{ flexWrap: 'nowrap' }}>
             <input id="team-link" readOnly value={teamUrl} onFocus={(e) => e.target.select()} />
             <CopyButton value={teamUrl} label="Copy" />
+          </div>
+          <div className="hint">
+            Copy it again after changing any setting here — the link carries your settings.
           </div>
         </div>
         <div className="field">
@@ -115,9 +222,11 @@ export function CoachPanel({
             controls what you see, not who can edit the sheet.
           </div>
         </div>
-        <a className="btn btn-sm" href={sheetUrl} target="_blank" rel="noopener noreferrer">
-          Open the sheet in Google Sheets
-        </a>
+        {sheetUrl && (
+          <a className="btn btn-sm" href={sheetUrl} target="_blank" rel="noopener noreferrer">
+            Open the sheet in Google Sheets
+          </a>
+        )}
       </section>
 
       {/* ------------------------------------------------------ data health */}
@@ -130,15 +239,15 @@ export function CoachPanel({
 
         {errors.length === 0 && warnings.length === 0 ? (
           <div className="notice notice-info" style={{ marginBottom: 0 }}>
-            <strong>All {matches.length} rows imported cleanly</strong>
+            <strong>All {matches.length} results imported cleanly</strong>
             No formatting problems found.
           </div>
         ) : (
           <>
-            {errors.length > 0 && (
+            {skippedRows > 0 && (
               <div className="notice notice-error">
                 <strong>
-                  {errors.length} row{errors.length === 1 ? '' : 's'} could not be counted
+                  {skippedRows} row{skippedRows === 1 ? '' : 's'} could not be counted
                 </strong>
                 These are excluded from the ladder until they are fixed in the sheet.
               </div>
@@ -165,6 +274,41 @@ export function CoachPanel({
         )}
       </section>
 
+      {/* -------------------------------------------------- open challenges */}
+      <section className="card panel">
+        <h3>Open challenges</h3>
+        <p className="panel-note">
+          To record a challenge before it is played, add a row with the challenger in the first
+          player column, the defender in the second, and the score left blank. Both players show{' '}
+          <span className="mono">Challenge Pending</span> and cannot take on another challenge until
+          you type the score into that row. Set its Status to{' '}
+          <span className="mono">Cancelled</span> to withdraw it.
+        </p>
+        {openChallenges.length === 0 ? (
+          <p className="small muted" style={{ margin: 0 }}>
+            No open challenges right now.
+          </p>
+        ) : (
+          <ul className="match-log">
+            {openChallenges.map((c, i) => (
+              <li key={i}>
+                <span className="issue-row">{c.sheetRow ? 'Row ' + c.sheetRow : 'Challenge'}</span>
+                <span style={{ flex: 1 }}>
+                  {nameFor(c.challengerKey)} <span className="muted">challenged</span>{' '}
+                  {nameFor(c.defenderKey)}
+                  {c.createdAt && (
+                    <>
+                      <br />
+                      <span className="small muted">{formatDate(c.createdAt)}</span>
+                    </>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {/* ------------------------------------------------ verification queue */}
       {pending.length > 0 && (
         <section className="card panel">
@@ -187,7 +331,7 @@ export function CoachPanel({
                   <span className="muted">def.</span>{' '}
                   {nameFor(m.winner === 'a' ? m.playerB : m.playerA)}
                   <br />
-                  <span className="leader-detail">{formatDate(m.date)}</span>
+                  <span className="small muted">{formatDate(m.date)}</span>
                 </span>
                 <span className="match-score">{formatScore(m.score)}</span>
               </li>
@@ -195,6 +339,43 @@ export function CoachPanel({
           </ul>
         </section>
       )}
+
+      {/* ------------------------------------------------------- roster tab */}
+      <section className="card panel">
+        <h3>Roster tab</h3>
+        <p className="panel-note">
+          Grades, divisions, photos, injury holds and challenge-ladder seeds come from a separate
+          Roster tab in the same spreadsheet. Open that tab in Google Sheets, copy the address
+          bar, and paste it here.
+        </p>
+        {isDemo ? (
+          <p className="small muted" style={{ margin: 0 }}>
+            The demo uses a built-in roster. Connect your own sheet to link a Roster tab.
+          </p>
+        ) : (
+          <>
+            {rosterGid && (
+              <div className={'notice ' + (rosterError ? 'notice-error' : 'notice-info')}>
+                <strong>
+                  {rosterError ? 'The Roster tab could not be read' : 'Roster tab connected'}
+                </strong>
+                {rosterError ?? 'Tab id ' + rosterGid + '. Roster details update with every refresh.'}
+                <div style={{ marginTop: 8 }}>
+                  <button className="btn btn-sm" onClick={() => onRosterGidChange(null)}>
+                    Disconnect roster tab
+                  </button>
+                </div>
+              </div>
+            )}
+            <RosterTabField
+              sheetId={sheetId}
+              matchesGid={matchesGid}
+              rosterGid={rosterGid}
+              onChange={onRosterGidChange}
+            />
+          </>
+        )}
+      </section>
 
       {/* ------------------------------------------------------ ladder rules */}
       <section className="card panel">
@@ -227,10 +408,13 @@ export function CoachPanel({
             <input
               id="range"
               type="number"
+              inputMode="numeric"
               min={1}
-              max={20}
+              max={50}
               value={config.challengeRange}
-              onChange={(e) => onConfigChange({ challengeRange: Math.max(1, Number(e.target.value) || 1) })}
+              onChange={(e) =>
+                onConfigChange({ challengeRange: Math.round(bounded(e.target.value, 1, 50, 1)) })
+              }
             />
           </div>
           <div className="field">
@@ -238,10 +422,13 @@ export function CoachPanel({
             <input
               id="cool"
               type="number"
+              inputMode="numeric"
               min={0}
-              max={90}
+              max={365}
               value={config.coolingOffDays}
-              onChange={(e) => onConfigChange({ coolingOffDays: Math.max(0, Number(e.target.value) || 0) })}
+              onChange={(e) =>
+                onConfigChange({ coolingOffDays: Math.round(bounded(e.target.value, 0, 365, 0)) })
+              }
             />
           </div>
           <div className="field">
@@ -249,10 +436,13 @@ export function CoachPanel({
             <input
               id="min"
               type="number"
+              inputMode="numeric"
               min={0}
-              max={20}
+              max={50}
               value={config.minMatchesForRating}
-              onChange={(e) => onConfigChange({ minMatchesForRating: Math.max(0, Number(e.target.value) || 0) })}
+              onChange={(e) =>
+                onConfigChange({ minMatchesForRating: Math.round(bounded(e.target.value, 0, 50, 0)) })
+              }
             />
           </div>
           <div className="field">
@@ -260,10 +450,13 @@ export function CoachPanel({
             <input
               id="window"
               type="number"
+              inputMode="numeric"
               min={1}
               max={365}
               value={config.movementWindowDays}
-              onChange={(e) => onConfigChange({ movementWindowDays: Math.max(1, Number(e.target.value) || 1) })}
+              onChange={(e) =>
+                onConfigChange({ movementWindowDays: Math.round(bounded(e.target.value, 1, 365, 1)) })
+              }
             />
           </div>
           <div className="field">
@@ -271,11 +464,12 @@ export function CoachPanel({
             <input
               id="base"
               type="number"
+              inputMode="decimal"
               min={1}
               max={7}
               step={0.5}
               value={config.baseRating}
-              onChange={(e) => onConfigChange({ baseRating: Number(e.target.value) || 3.5 })}
+              onChange={(e) => onConfigChange({ baseRating: bounded(e.target.value, 1, 7, 3.5) })}
             />
             <div className="hint">
               Only gaps between players are measurable from your results, so the squad average is
@@ -287,10 +481,13 @@ export function CoachPanel({
             <input
               id="refresh"
               type="number"
+              inputMode="numeric"
               min={10}
               max={3600}
               value={refreshSeconds}
-              onChange={(e) => onRefreshSecondsChange(Math.max(10, Number(e.target.value) || 30))}
+              onChange={(e) =>
+                onRefreshSecondsChange(Math.round(bounded(e.target.value, 10, 3600, 30)))
+              }
             />
           </div>
         </div>
@@ -331,7 +528,8 @@ export function CoachPanel({
       <section className="card panel">
         <h3>Column mapping</h3>
         <p className="panel-note">
-          Detected automatically from your headers. Change anything that was read wrong.
+          Detected automatically from your headers. Change anything that was read wrong — your
+          choices are saved into the team link, so every teammate reads the sheet the same way.
         </p>
         <div className="field-row">
           {FIELD_LABELS.map(({ field, label, hint }) => (

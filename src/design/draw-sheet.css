@@ -1,21 +1,25 @@
 /*
- * Draw-sheet leaderboard - design review pass.
+ * Draw-sheet leaderboard.
  *
  * Modeled on a printed tournament draw sheet / college athletics record board:
- * typographic and data-forward, with the ranking table as the only real "component"
- * on the page. Hierarchy comes from type size, weight and whitespace - never from
- * cards, shadows or color blocks.
+ * typographic and data-forward, with the ranking table as the heart of the page.
+ * Hierarchy comes from type size, weight and whitespace - never from cards, shadows
+ * or color blocks.
  *
- * Color discipline: one accent (a muted green/red pair) is used for exactly one
- * thing - rank-movement triangles - and nowhere else. Everything else on the page
- * is near-black ink, a softer ink, or muted gray on a warm off-white ground.
+ * Color discipline: a muted green/red pair marks rank movement. The only other color
+ * is the status badge, because AC-1.2.3 requires Available / Challenge Pending /
+ * Injury Hold to be told apart at a glance; each badge pairs a tint with text that
+ * clears WCAG AA. Everything else is near-black ink, a softer ink, or muted gray on a
+ * warm off-white ground.
  */
 
 .draw-sheet {
   --ds-bg: #faf9f7;
   --ds-ink: #17150f;
   --ds-ink-soft: #4a4638;
-  --ds-muted: #8f8a78;
+  /* Secondary text. Darkened from #8f8a78 (3.3:1) to clear WCAG AA at the 11-13px sizes
+     it is set in - this page is read on phones outdoors, beside a court. */
+  --ds-muted: #6f6a58;
   --ds-muted-2: #b3ac97;
   --ds-hairline: #e5e0d3;
   --ds-hairline-strong: #d3ccb9;
@@ -507,4 +511,260 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.ds-empty-message {
+  font-size: 14px;
+  color: var(--ds-ink-soft);
+  margin: 0 0 18px;
+  line-height: 1.55;
+}
+
+/* ------------------------------------------------------- avatar and status */
+
+.ds-player-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ds-avatar {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  object-fit: cover;
+  background: #efebe1;
+  border: 1px solid var(--ds-hairline-strong);
+  color: var(--ds-ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ds-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.ds-badge.is-available { color: #3b6446; background: #edf3eb; border-color: #cddbc9; }
+.ds-badge.is-pending { color: #74520c; background: #f8efd8; border-color: #e5d09a; }
+.ds-badge.is-injury { color: #97402f; background: #f7e7e3; border-color: #e4c3ba; }
+.ds-badge.is-inactive { color: #625d4e; background: #eeebe3; border-color: #d9d3c2; }
+
+.ds-table thead th.ds-col-status,
+.ds-cell-status { white-space: nowrap; }
+
+/* The badge sits in its own column on wide screens and under the name on phones. */
+.ds-status-inline { display: none; }
+
+.ds-rating-none { color: var(--ds-muted-2); font-weight: 600; }
+
+/* ----------------------------------------------------------- leaders spotlight */
+
+.ds-section-title {
+  margin: 26px 0 0;
+  padding-bottom: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+}
+
+.ds-podium {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--ds-hairline-strong);
+  border-bottom: 1px solid var(--ds-hairline-strong);
+}
+
+.ds-podium li + li { border-left: 1px solid var(--ds-hairline); }
+
+.ds-podium-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 12px;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.ds-podium-item:hover { background: rgba(23, 21, 15, 0.025); }
+
+.ds-podium-place {
+  flex: none;
+  min-width: 26px;
+  font-family: var(--ds-font-display);
+  font-size: 14px;
+  color: var(--ds-muted);
+}
+
+.ds-podium-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ds-podium-name {
+  font-family: var(--ds-font-display);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ds-ink);
+  overflow-wrap: anywhere;
+}
+
+.ds-podium-meta {
+  font-size: 12.5px;
+  color: var(--ds-ink-soft);
+}
+
+.ds-boards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px 28px;
+  margin-top: 36px;
+}
+
+.ds-board-title {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ds-hairline-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+}
+
+.ds-board-list { list-style: none; margin: 0; padding: 0; }
+
+.ds-board-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ds-hairline);
+}
+
+.ds-board-name {
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ds-ink);
+  overflow-wrap: anywhere;
+}
+
+.ds-board-name:hover,
+.ds-podium-item:hover .ds-podium-name {
+  text-decoration: underline;
+  text-decoration-color: var(--ds-hairline-strong);
+  text-underline-offset: 3px;
+}
+
+.ds-board-tied { font-size: 12px; font-weight: 400; color: var(--ds-muted); }
+.ds-board-value { font-size: 15px; font-weight: 700; text-align: right; }
+.ds-board-detail { grid-column: 1 / -1; font-size: 12px; color: var(--ds-muted); }
+.ds-board-empty { margin: 10px 0 0; font-size: 13px; color: var(--ds-muted); }
+
+/* --------------------------------------------------------- player detail */
+
+.ds-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0 0 14px;
+}
+
+.ds-stats div { display: flex; flex-direction: column; }
+
+.ds-stats dt {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+}
+
+.ds-stats dd {
+  margin: 1px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ds-ink);
+}
+
+.ds-detail-note {
+  margin: 0 0 12px;
+  max-width: 62ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ds-ink-soft);
+}
+
+.ds-detail-note strong { color: var(--ds-ink); font-weight: 600; }
+
+.ds-challenges { margin-bottom: 14px; }
+
+.ds-challenge-list { list-style: none; margin: 0 0 8px; padding: 0; }
+
+.ds-challenge-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 13px;
+}
+
+.ds-challenge-rank { min-width: 18px; font-weight: 600; color: var(--ds-ink-soft); }
+.ds-challenge-name { flex: 1; min-width: 0; color: var(--ds-ink); }
+.ds-challenge-reason { display: block; margin-top: 1px; font-size: 12px; color: var(--ds-muted); }
+
+.ds-challenge-verdict {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.is-eligible .ds-challenge-verdict { color: var(--ds-up); }
+.is-blocked .ds-challenge-verdict { color: var(--ds-muted); }
+.is-blocked .ds-challenge-name { color: var(--ds-ink-soft); }
+
+.ds-match-log .ds-pending {
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #74520c;
+}
+
+@media (max-width: 760px) {
+  .ds-boards { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .ds-col-status { display: none; }
+  .ds-status-inline { display: block; margin-top: 4px; }
+  .ds-avatar { width: 26px; height: 26px; font-size: 10px; }
+  .ds-player-wrap { gap: 8px; }
+
+  .ds-podium { grid-template-columns: 1fr; }
+  .ds-podium li + li { border-left: none; border-top: 1px solid var(--ds-hairline); }
+  .ds-podium-item { padding: 10px 0; }
 }
