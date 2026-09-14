@@ -156,7 +156,7 @@ version would give `buildDashboard` a different data source without changing any
 ## Test summary
 
 ```
- 12 files · 262 unit and acceptance tests · all passing   (npm test)
+ 12 files · 261 unit and acceptance tests · all passing   (npm test)
 
  score.test.ts        23   parsing, validation, tiebreak rules
  rating.test.ts       20   NTRP calibration, convergence, determinism
@@ -169,7 +169,7 @@ version would give `buildDashboard` a different data source without changing any
  ladder-api.test.ts   14   publishing API: password, lockout, tokens, validation, history
  publish.test.ts       9   publishing client
  export.test.ts        8   CSV and text exports, formula-injection guard
- acceptance.test.ts   48   QA test cases, doubles, data integrity invariants
+ acceptance.test.ts   47   QA test cases, doubles, data integrity invariants
 
  4 files · 16 browser tests · desktop and mobile Chrome   (npm run test:e2e)
 

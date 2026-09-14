@@ -48,7 +48,7 @@ Girls singles and doubles. The dev server has no publishing API, so it runs in
 link-sharing mode (see [Deploying](#deploying)).
 
 ```bash
-npm test          # 262 unit and acceptance tests
+npm test          # 261 unit and acceptance tests
 npm run test:e2e  # production build + 16 browser tests, desktop and mobile
 npm run build     # production build into dist/
 ```
@@ -220,7 +220,7 @@ src/lib/          ranking core in plain TypeScript, no React
 src/design/       the ladder page, plus a design preview harness (design-preview.html)
 src/components/   setup page, coach sign-in, coach console
 src/hooks/        live sheet polling, the published ladder
-src/__tests__/    262 unit and acceptance tests
+src/__tests__/    261 unit and acceptance tests
 e2e/              16 browser tests and a local stand-in for the Vercel deployment
 scripts/          demo data generator
 docs/             ranking rules, coach guide, traceability
