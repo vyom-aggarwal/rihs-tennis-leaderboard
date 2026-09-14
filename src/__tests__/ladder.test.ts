@@ -6,6 +6,7 @@ import {
   countableMatches,
   listTeams,
   matchesForTeam,
+  rankTimeline,
   resolveTeams,
 } from '../lib/ladder';
 import { computeRatings } from '../lib/rating';
@@ -259,6 +260,36 @@ describe('buildLadder', () => {
         config,
       });
     expect(order(build().standings)).toEqual(order(build().standings));
+  });
+});
+
+describe('rankTimeline', () => {
+  const now = new Date('2026-09-01T12:00:00Z');
+
+  it("tracks a player's position at the end of each day they played", () => {
+    const matches = [
+      match('Bea', 'Ana', '6-0', { date: daysAgo(20, now) }),
+      match('Bea', 'Cat', '6-1', { date: daysAgo(15, now) }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(10, now) }),
+      match('Ana', 'Cat', '6-0', { date: daysAgo(5, now) }),
+    ];
+    const input = { matches, roster: new Map(), displayNames: names('Ana', 'Bea', 'Cat'), config, now };
+    const points = rankTimeline(matches, input, k('Ana'));
+    expect(points.map((p) => [p.rank, p.of])).toEqual([
+      [2, 2], // lost to Bea: second of two
+      [1, 3], // beat Bea: top of three
+      [1, 3],
+    ]);
+    expect(points.map((p) => p.date.getTime())).toEqual([...points.map((p) => p.date.getTime())].sort((a, b) => a - b));
+  });
+
+  it('has nothing to plot for an undated sheet or a rejected-only history', () => {
+    const undated = [match('Ana', 'Bea', '6-1'), match('Bea', 'Ana', '6-2')];
+    const input = { matches: undated, roster: new Map(), displayNames: names('Ana', 'Bea'), config, now };
+    expect(rankTimeline(undated, input, k('Ana'))).toEqual([]);
+
+    const rejected = [match('Ana', 'Bea', '6-1', { date: daysAgo(3, now), approval: 'Rejected' })];
+    expect(rankTimeline(rejected, { ...input, matches: rejected }, k('Ana'))).toEqual([]);
   });
 });
 

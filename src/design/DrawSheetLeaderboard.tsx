@@ -3,9 +3,9 @@
  *
  * Modeled on a printed tournament draw sheet: the table is the heart of the page, and
  * hairline rules stand in for cards and borders. There is no login, so nothing on the
- * page is scoped to "you". Nothing here reads from src/lib directly; it takes the real
- * StandingRow / Leaders / ChallengeOption shapes as props, which is what lets the design
- * preview harness render it from hand-written sample data.
+ * page is scoped to "you". It takes the real StandingRow / Leaders / ChallengeOption
+ * shapes as props rather than computing them, which is what lets the design preview
+ * harness render it from hand-written sample data.
  *
  * What the coach's requirements put on this page, and where:
  *   AC-1.1.1-3  ladder tabs, with a solid underline on the active tab
@@ -13,13 +13,17 @@
  *   AC-1.2.3    distinct Available / Challenge Pending / Injury Hold badges
  *   PRD 6.2     top-three spotlight plus Most Wins, Longest Active Streak and Top Climber
  *   AC-2.1.1-2  each player's expanded row lists who they may challenge, and why not
+ *   PRD 9       doubles ladders, behind a Singles / Doubles switch
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { initials, relativeTime } from '../components/common';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { formatDate, initials, relativeTime } from '../components/common';
 import type { ChallengeOption } from '../lib/challenge';
+import { issueLocation } from '../lib/dashboard';
+import { exportFileName, standingsCsv, standingsText } from '../lib/export';
+import type { RankPoint } from '../lib/ladder';
 import type { LeaderEntry, Leaders } from '../lib/leaders';
-import type { DataIssue, DisplayStatus, StandingRow } from '../lib/types';
+import type { DataIssue, DisplayStatus, MatchFormat, StandingRow } from '../lib/types';
 import './draw-sheet.css';
 
 export interface MatchLogEntry {
@@ -37,6 +41,19 @@ export interface DrawSheetDivision {
   standings: StandingRow[];
   /** Spotlight and performance leaderboards for this ladder (PRD 6.2). */
   leaders?: Leaders;
+  /** Boards sharing a group sit under one ladder tab and differ only by format. */
+  group?: string;
+  /** The ladder tab's label, e.g. "Boys Ladder". Defaults to `label`. */
+  groupLabel?: string;
+  format?: MatchFormat;
+}
+
+export interface UpcomingMatch {
+  challenger: string;
+  challengerRank: number | null;
+  defender: string;
+  defenderRank: number | null;
+  date: string | null;
 }
 
 export type DrawSheetStatus = 'ready' | 'loading' | 'empty' | 'blocked';
@@ -54,7 +71,7 @@ export interface DrawSheetLeaderboardProps {
   staleAfterMinutes?: number;
   /** Small text actions (refresh, coach console, ...) shown next to the sync line. */
   headerActions?: ReactNode;
-  /** A contextual notice (demo mode, showing stale data) shown above the table. */
+  /** Contextual notices (demo mode, stale data, unpublished changes) shown above the table. */
   banner?: ReactNode;
   /** Named, row-level data issues worth surfacing - each becomes its own quiet notice. */
   issues?: DataIssue[];
@@ -63,6 +80,10 @@ export interface DrawSheetLeaderboardProps {
   challengeOptions?: (row: StandingRow) => ChallengeOption[];
   /** A one-line description of a player's open challenge, or null when they have none. */
   openChallengeFor?: (row: StandingRow) => string | null;
+  /** A player's position after each day they played. Omit to hide the chart. */
+  rankHistoryFor?: (row: StandingRow) => RankPoint[];
+  /** Challenges issued on the visible ladder and not yet played. */
+  upcoming?: UpcomingMatch[];
   /** Spots ahead a player may challenge. Defaults to 3. */
   challengeRange?: number;
   /** Window behind the movement arrows and Top Climber. Defaults to 30. */
@@ -93,6 +114,23 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
     props.lastSynced && (props.now.getTime() - props.lastSynced.getTime()) / 60000 > staleAfter,
   );
 
+  // Ladder tabs group boards by team; a Singles / Doubles switch picks within the group.
+  const groups = useMemo(() => {
+    const list: Array<{ key: string; label: string; divisions: DrawSheetDivision[] }> = [];
+    for (const d of props.divisions) {
+      const key = d.group ?? d.id;
+      const existing = list.find((g) => g.key === key);
+      if (existing) existing.divisions.push(d);
+      else list.push({ key, label: d.groupLabel ?? d.label, divisions: [d] });
+    }
+    return list;
+  }, [props.divisions]);
+
+  const activeGroup = activeDivision
+    ? groups.find((g) => g.key === (activeDivision.group ?? activeDivision.id)) ?? null
+    : null;
+  const format: MatchFormat = activeDivision?.format ?? 'singles';
+
   // Choosing a name in the spotlight opens that player's row and brings it into view.
   useEffect(() => {
     if (!scrollToKey) return;
@@ -114,7 +152,13 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
     setScrollToKey(key);
   };
 
+  const selectDivision = (id: string) => {
+    setExpandedKey(null);
+    props.onSelectDivision(id);
+  };
+
   const windowDays = props.movementWindowDays ?? 30;
+  const ready = props.status === 'ready';
 
   return (
     <div className="draw-sheet">
@@ -123,21 +167,22 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
         <h1 className="ds-title">{props.subtitle ?? 'Tennis Ladder'}</h1>
 
         <div className="ds-meta-row">
-          {(props.status === 'ready' || props.status === 'loading') &&
-          props.divisions.length > 1 ? (
+          {(ready || props.status === 'loading') && groups.length > 1 ? (
             <div className="ds-tabs" role="tablist" aria-label="Choose a ladder">
-              {props.divisions.map((d) => (
+              {groups.map((g) => (
                 <button
-                  key={d.id}
+                  key={g.key}
                   role="tab"
-                  aria-selected={d.id === activeDivision?.id}
+                  aria-selected={g.key === activeGroup?.key}
                   className="ds-tab"
                   onClick={() => {
-                    setExpandedKey(null);
-                    props.onSelectDivision(d.id);
+                    if (g.key === activeGroup?.key) return;
+                    // Stay on the same format when the other team has one.
+                    const next = g.divisions.find((d) => (d.format ?? 'singles') === format) ?? g.divisions[0]!;
+                    selectDivision(next.id);
                   }}
                 >
-                  {d.label}
+                  {g.label}
                 </button>
               ))}
             </div>
@@ -145,7 +190,7 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
             <span />
           )}
 
-          {props.status === 'ready' && (
+          {ready && (
             <span className="ds-meta-right">
               <span className={'ds-sync' + (stale ? ' is-stale' : '')}>
                 {props.lastSynced
@@ -162,6 +207,20 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
         </div>
         <hr className="ds-rule" />
 
+        {ready && activeGroup && activeGroup.divisions.length > 1 && (
+          <div className="ds-format-switch" role="group" aria-label="Singles or doubles">
+            {activeGroup.divisions.map((d) => (
+              <button
+                key={d.id}
+                aria-pressed={d.id === activeDivision?.id}
+                onClick={() => d.id !== activeDivision?.id && selectDivision(d.id)}
+              >
+                {d.format === 'doubles' ? 'Doubles' : d.format === 'singles' ? 'Singles' : d.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {props.banner}
 
         {props.status === 'empty' && <EmptyState onConnectSheet={props.onConnectSheet} />}
@@ -173,7 +232,7 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
           />
         )}
         {props.status === 'loading' && <SkeletonRows />}
-        {props.status === 'ready' && activeDivision && (
+        {ready && activeDivision && (
           <>
             {(props.issues ?? []).map((issue, i) => (
               <IssueNotice key={i} issue={issue} />
@@ -183,22 +242,32 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
             )}
             <Table
               standings={activeDivision.standings}
+              format={format}
               expandedKey={expandedKey}
               onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
               detail={{
                 matchLog: props.matchLog,
                 challengeOptions: props.challengeOptions,
                 openChallengeFor: props.openChallengeFor,
+                rankHistoryFor: props.rankHistoryFor,
                 challengeRange: props.challengeRange ?? 3,
                 movementWindowDays: windowDays,
                 minMatchesForRating: props.minMatchesForRating ?? 3,
               }}
               caption={
-                props.orderedBy === 'challenge'
-                  ? 'Ladder standings, in challenge ladder order.'
-                  : 'Ladder standings, ordered by rating.'
+                activeDivision.label +
+                (props.orderedBy === 'challenge' ? ', in challenge ladder order.' : ', ordered by rating.')
               }
             />
+            {activeDivision.standings.length > 0 && (
+              <BoardTools
+                standings={activeDivision.standings}
+                format={format}
+                title={activeDivision.label + ' — ' + props.teamName}
+                fileLabel={activeDivision.label}
+                now={props.now}
+              />
+            )}
             {activeDivision.leaders && activeDivision.standings.length > 0 && (
               <Leaderboards
                 leaders={activeDivision.leaders}
@@ -207,6 +276,7 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
                 onSelect={selectPlayer}
               />
             )}
+            {props.upcoming && props.upcoming.length > 0 && <Upcoming matches={props.upcoming} />}
           </>
         )}
 
@@ -301,12 +371,93 @@ function Leaderboards({
   );
 }
 
+/** Challenges issued and not yet played - the "upcoming matches" parents look for. */
+function Upcoming({ matches }: { matches: UpcomingMatch[] }) {
+  const rank = (n: number | null) => (n === null ? '' : ' (#' + n + ')');
+  return (
+    <section className="ds-upcoming" aria-labelledby="ds-upcoming-title">
+      <h2 className="ds-section-title" id="ds-upcoming-title">
+        Upcoming challenge matches
+      </h2>
+      <ul className="ds-upcoming-list">
+        {matches.map((m, i) => (
+          <li key={i}>
+            <span>
+              {m.challenger}
+              <span className="ds-upcoming-rank ds-num">{rank(m.challengerRank)}</span>{' '}
+              <span className="ds-upcoming-vs">challenged</span> {m.defender}
+              <span className="ds-upcoming-rank ds-num">{rank(m.defenderRank)}</span>
+            </span>
+            {m.date && <span className="ds-when">{m.date}</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Download, copy and print the visible ladder. */
+function BoardTools({
+  standings,
+  format,
+  title,
+  fileLabel,
+  now,
+}: {
+  standings: StandingRow[];
+  format: MatchFormat;
+  title: string;
+  fileLabel: string;
+  now: Date;
+}) {
+  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  useEffect(() => {
+    if (copied === 'idle') return;
+    const id = setTimeout(() => setCopied('idle'), 2000);
+    return () => clearTimeout(id);
+  }, [copied]);
+
+  const download = () => {
+    // The byte-order mark makes Excel read accented names as UTF-8.
+    const blob = new Blob(['\uFEFF' + standingsCsv(standings, format)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = exportFileName(fileLabel, now);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(standingsText(standings, title));
+      setCopied('copied');
+    } catch {
+      setCopied('failed');
+    }
+  };
+
+  return (
+    <div className="ds-board-tools">
+      <button onClick={download}>Download CSV</button>
+      <button onClick={copy} aria-live="polite">
+        {copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Copy blocked by browser' : 'Copy standings'}
+      </button>
+      <button onClick={() => window.print()}>Print</button>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------------- table
 
 interface DetailSources {
   matchLog: (row: StandingRow) => MatchLogEntry[];
   challengeOptions?: (row: StandingRow) => ChallengeOption[];
   openChallengeFor?: (row: StandingRow) => string | null;
+  rankHistoryFor?: (row: StandingRow) => RankPoint[];
   challengeRange: number;
   movementWindowDays: number;
   minMatchesForRating: number;
@@ -314,12 +465,14 @@ interface DetailSources {
 
 function Table({
   standings,
+  format,
   expandedKey,
   onToggle,
   detail,
   caption,
 }: {
   standings: StandingRow[];
+  format: MatchFormat;
   expandedKey: string | null;
   onToggle: (key: string) => void;
   detail: DetailSources;
@@ -343,7 +496,7 @@ function Table({
       <thead>
         <tr>
           <th scope="col">Rank</th>
-          <th scope="col">Player</th>
+          <th scope="col">{format === 'doubles' ? 'Pair' : 'Player'}</th>
           <th scope="col" className="ds-col-status">Status</th>
           <th scope="col" className="ds-col-num">Record</th>
           <th scope="col" className="ds-col-num">Rating</th>
@@ -461,6 +614,10 @@ function PlayerDetail({ r, sources }: { r: StandingRow; sources: DetailSources }
   const log = sources.matchLog(r);
   const openChallenge = sources.openChallengeFor?.(r) ?? null;
   const options = sources.challengeOptions?.(r);
+  // Replaying the season day by day is the heaviest thing on the page; do it once per
+  // opened row rather than on every clock tick.
+  const { rankHistoryFor } = sources;
+  const history = useMemo(() => rankHistoryFor?.(r) ?? [], [rankHistoryFor, r]);
   const streak =
     r.streak.current === 0 ? '–' : (r.streak.current > 0 ? 'W' : 'L') + Math.abs(r.streak.current);
 
@@ -493,6 +650,8 @@ function PlayerDetail({ r, sources }: { r: StandingRow; sources: DetailSources }
         </dl>
       )}
 
+      {history.length > 0 && <RankChart points={history} current={r.rank} />}
+
       {r.provisional && r.record.matches > 0 && (
         <p className="ds-detail-note">
           Provisional rating — {r.record.matches} of the {sources.minMatchesForRating} matches
@@ -523,6 +682,46 @@ function PlayerDetail({ r, sources }: { r: StandingRow; sources: DetailSources }
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Ladder position over the season, rank 1 at the top. */
+function RankChart({ points, current }: { points: RankPoint[]; current: number }) {
+  const series = [...points.map((p) => ({ label: formatDate(p.date), rank: p.rank })), { label: 'now', rank: current }];
+  if (series.length < 2) return null;
+
+  const width = 240;
+  const height = 64;
+  const padX = 6;
+  const padY = 8;
+  const deepest = Math.max(2, ...series.map((p) => p.rank), ...points.map((p) => p.of));
+  const x = (i: number) => padX + (i * (width - 2 * padX)) / (series.length - 1);
+  const y = (rank: number) => padY + ((rank - 1) * (height - 2 * padY)) / (deepest - 1);
+  const first = series[0]!;
+  const best = Math.min(...series.map((p) => p.rank));
+  const summary =
+    'Rank over time: #' + first.rank + ' on ' + first.label + ', best #' + best + ', #' + current + ' now.';
+
+  return (
+    <div className="ds-rank-chart">
+      <p className="ds-detail-label">Rank over time</p>
+      <svg viewBox={'0 0 ' + width + ' ' + height} width={width} height={height} role="img" aria-label={summary}>
+        <line x1={padX} x2={width - padX} y1={y(1)} y2={y(1)} className="ds-rank-chart-top" />
+        <polyline
+          points={series.map((p, i) => x(i) + ',' + y(p.rank)).join(' ')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        {series.map((p, i) => (
+          <circle key={i} cx={x(i)} cy={y(p.rank)} r={i === series.length - 1 ? 3.5 : 2.25} fill="currentColor" />
+        ))}
+      </svg>
+      <p className="ds-rank-summary">
+        #{first.rank} on {first.label} · best #{best} · #{current} now
+      </p>
     </div>
   );
 }
@@ -637,6 +836,13 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
   return <span className={'ds-badge ' + STATUS_CLASS[status]}>{status}</span>;
 }
 
+/** "Jake Whitmore / Marcus Webb" -> "JM"; a single name -> its usual initials. */
+function avatarInitials(name: string): string {
+  const partners = name.split(' / ');
+  if (partners.length === 2) return partners.map((p) => (p.trim()[0] ?? '?').toUpperCase()).join('');
+  return initials(name);
+}
+
 function Avatar({ row }: { row: StandingRow }) {
   // A photo link that is not an image (a Drive page, a typo) must fall back to initials
   // rather than leave a broken-image icon on the board.
@@ -656,7 +862,7 @@ function Avatar({ row }: { row: StandingRow }) {
   }
   return (
     <span className="ds-avatar" aria-hidden="true">
-      {initials(row.displayName)}
+      {avatarInitials(row.displayName)}
     </span>
   );
 }
@@ -716,7 +922,7 @@ function Blocked({
 function IssueNotice({ issue }: { issue: DataIssue }) {
   return (
     <div className="ds-notice">
-      <p className="ds-notice-label">{issue.sheetRow ? 'Row ' + issue.sheetRow : 'Data issue'}</p>
+      <p className="ds-notice-label">{issueLocation(issue) ?? 'Data issue'}</p>
       <p>
         {issue.message}
         {issue.context ? ' (' + issue.context + ')' : ''}

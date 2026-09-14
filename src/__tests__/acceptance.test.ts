@@ -23,6 +23,7 @@ const config: LadderConfig = { ...DEFAULT_LADDER_CONFIG };
 
 const demoMatches = readFileSync('sample-data/demo-matches.csv', 'utf8');
 const demoRoster = readFileSync('sample-data/demo-roster.csv', 'utf8');
+const demoDoubles = readFileSync('sample-data/demo-doubles.csv', 'utf8');
 
 const demo = () =>
   buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, config, now: NOW });
@@ -309,6 +310,80 @@ describe('TC-2.2 score entry and verification (AC-2.2.1, AC-2.2.2, AC-2.2.3)', (
     expect(after.indexOf('p6') + 1).toBe(7); // defender drops to 7
     expect(after.indexOf('p7') + 1).toBe(8);
     expect(after.slice(0, 5)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']); // above untouched
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Doubles ladders (PRD 9, v2.0 scope)
+// ---------------------------------------------------------------------------
+describe('doubles ladders', () => {
+  const withDoubles = () =>
+    buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, doublesCsv: demoDoubles, config, now: NOW });
+
+  it('adds Boys and Girls doubles boards from the Doubles tab, with no errors', () => {
+    const d = withDoubles();
+    expect(d.boards.map((b) => b.label)).toEqual(['Boys Ladder', 'Girls Ladder', 'Boys Doubles', 'Girls Doubles']);
+    expect(d.boards.map((b) => b.id)).toEqual(['Boys:singles', 'Girls:singles', 'Boys:doubles', 'Girls:doubles']);
+    expect(d.issues.filter((i) => i.severity === 'error')).toEqual([]);
+    for (const board of d.boards.filter((b) => b.format === 'doubles')) {
+      expect(board.standings).toHaveLength(4);
+      expect(board.standings.every((s) => s.displayName.includes(' / '))).toBe(true);
+    }
+  });
+
+  it('never lets doubles results change a singles ladder or record', () => {
+    const plain = demo();
+    const both = withDoubles();
+    for (let i = 0; i < 2; i++) {
+      expect(both.boards[i]!.standings.map((s) => [s.key, s.rating, s.record.wins])).toEqual(
+        plain.boards[i]!.standings.map((s) => [s.key, s.rating, s.record.wins]),
+      );
+    }
+  });
+
+  it('balances wins against losses on every doubles board', () => {
+    for (const board of withDoubles().boards.filter((b) => b.format === 'doubles')) {
+      const wins = board.standings.reduce((n, s) => n + s.record.wins, 0);
+      expect(wins).toBe(board.standings.reduce((n, s) => n + s.record.losses, 0));
+      expect(wins).toBe(board.matches.length);
+    }
+  });
+
+  it('shows Challenge Pending for both pairs of an open doubles challenge', () => {
+    const boys = withDoubles().boards.find((b) => b.id === 'Boys:doubles')!.standings;
+    const status = (name: string) => boys.find((s) => s.displayName === name)!.displayStatus;
+    expect(status('Pedro Alvarez / Ravi Menon')).toBe('Challenge Pending');
+    expect(status('Adrian Foster / Johnny Park')).toBe('Challenge Pending');
+    expect(status('Jake Whitmore / Mike Sullivan')).toBe('Available');
+  });
+
+  it('puts a pair on injury hold when either partner is injured, and names mixed pairs', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\n',
+      doublesCsv: 'Pair 1,Pair 2,Score\nJake / Marcus,Pedro / Adrian,6-4\nJake / Sofia,Pedro / Maya,6-3',
+      rosterCsv: 'Name,Team,Status\nJake,Boys,\nMarcus,Boys,Injured\nPedro,Boys,\nAdrian,Boys,\nSofia,Girls,\nMaya,Girls,',
+      config,
+      now: NOW,
+    });
+    const boys = d.boards.find((b) => b.id === 'Boys:doubles')!.standings;
+    expect(boys.find((s) => s.displayName === 'Jake / Marcus')!.displayStatus).toBe('Injury Hold');
+    expect(boys.find((s) => s.displayName === 'Adrian / Pedro')!.displayStatus).toBe('Available');
+    expect(d.boards.find((b) => b.id === 'Mixed:doubles')!.label).toBe('Mixed Doubles');
+  });
+
+  it('does not open a doubles-only sheet on an empty singles ladder', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Pair 1,Pair 2,Score\nJake / Marcus,Pedro / Adrian,6-4',
+      config,
+      now: NOW,
+    });
+    expect(d.boards.map((b) => b.label)).toEqual(['Doubles Ladder']);
+  });
+
+  it('reports an unreadable Doubles tab without blocking the singles ladder', () => {
+    const d = buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, doublesCsv: 'Foo,Bar\n1,2', config, now: NOW });
+    expect(d.boards.map((b) => b.label)).toEqual(['Boys Ladder', 'Girls Ladder']);
+    expect(d.issues.find((i) => i.code === 'doubles-mapping-incomplete')!.tab).toBe('Doubles tab');
   });
 });
 

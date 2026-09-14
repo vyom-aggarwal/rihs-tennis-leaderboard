@@ -22,6 +22,7 @@ import { fetchSheetCsv, parseSheetUrl, sheetCacheKey, SheetError, type SheetRef 
 export interface LiveSheetState {
   matchesCsv: string | null;
   rosterCsv: string | null;
+  doublesCsv: string | null;
   /** True only until the first copy of the sheet is available, so the UI shows a skeleton once. */
   loading: boolean;
   /** True while a background revalidation is in flight. */
@@ -29,6 +30,8 @@ export interface LiveSheetState {
   error: SheetError | null;
   /** Set when a roster tab is configured but could not be read. The ladder still loads. */
   rosterError: SheetError | null;
+  /** Set when a doubles tab is configured but could not be read. The ladder still loads. */
+  doublesError: SheetError | null;
   lastUpdated: Date | null;
   /** True when the rendered data came from cache and has not been revalidated yet. */
   fromCache: boolean;
@@ -38,6 +41,7 @@ export interface LiveSheetState {
 interface CachedSheet {
   matchesCsv: string;
   rosterCsv: string | null;
+  doublesCsv: string | null;
   savedAt: number;
 }
 
@@ -46,6 +50,7 @@ interface LoadedSheet {
   source: string;
   matchesCsv: string;
   rosterCsv: string | null;
+  doublesCsv: string | null;
   updatedAt: Date;
   fromCache: boolean;
 }
@@ -54,6 +59,12 @@ interface Failure {
   source: string;
   error: SheetError | null;
   rosterError: SheetError | null;
+  doublesError: SheetError | null;
+}
+
+interface TabResult {
+  csv: string | null;
+  error: SheetError | null;
 }
 
 /** A visibility change within this long of the last fetch does not trigger another. */
@@ -68,6 +79,7 @@ function readCache(key: string): CachedSheet | null {
     return {
       matchesCsv: parsed.matchesCsv,
       rosterCsv: typeof parsed.rosterCsv === 'string' ? parsed.rosterCsv : null,
+      doublesCsv: typeof parsed.doublesCsv === 'string' ? parsed.doublesCsv : null,
       savedAt: parsed.savedAt,
     };
   } catch {
@@ -103,11 +115,12 @@ export function useLiveSheet(
   sheetId: string | null,
   gid: string | null,
   rosterGid: string | null,
+  doublesGid: string | null,
   refreshSeconds: number,
 ): LiveSheetState {
   // Everything loaded is tagged with its source, so switching sheets or tabs can never
   // show one sheet's ladder under another's link, even for a single render.
-  const source = sheetId ? [sheetId, gid ?? '', rosterGid ?? ''].join('|') : null;
+  const source = sheetId ? [sheetId, gid ?? '', rosterGid ?? '', doublesGid ?? ''].join('|') : null;
 
   const [loaded, setLoaded] = useState<LoadedSheet | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -131,7 +144,8 @@ export function useLiveSheet(
     }
 
     const ref = refFromSheetId(sheetId, gid);
-    const cacheKey = sheetCacheKey(ref) + ':roster=' + (rosterGid ?? 'none');
+    const cacheKey =
+      sheetCacheKey(ref) + ':roster=' + (rosterGid ?? 'none') + ':doubles=' + (doublesGid ?? 'none');
 
     if (loadedRef.current?.source !== source) {
       // A different sheet or tab: paint its cached copy immediately if there is one,
@@ -142,6 +156,7 @@ export function useLiveSheet(
             source,
             matchesCsv: cached.matchesCsv,
             rosterCsv: cached.rosterCsv,
+            doublesCsv: cached.doublesCsv,
             updatedAt: new Date(cached.savedAt),
             fromCache: true,
           }
@@ -156,37 +171,51 @@ export function useLiveSheet(
     lastFetchRef.current = Date.now();
     setRefreshing(true);
 
+    // Optional tabs are fetched alongside the matches, not after them, so they cost no
+    // extra time on first load. A missing or unreadable optional tab must not take the
+    // ladder down with it - the matches tab alone is enough to rank the team.
+    const optionalTab = (tabGid: string | null): Promise<TabResult> =>
+      tabGid
+        ? fetchSheetCsv({ ...ref, gid: tabGid }, { signal: controller.signal }).then(
+            (csv): TabResult => ({ csv, error: null }),
+            (err: unknown): TabResult => {
+              if (isAbort(err)) throw err;
+              return { csv: null, error: toSheetError(err) };
+            },
+          )
+        : Promise.resolve({ csv: null, error: null });
+
     (async () => {
       try {
-        // The roster is fetched alongside the matches, not after them, so it costs no
-        // extra time on first load. A missing or unreadable roster tab must not take the
-        // ladder down with it - the matches sheet alone is enough to rank the team.
-        const rosterRequest = rosterGid
-          ? fetchSheetCsv({ ...ref, gid: rosterGid }, { signal: controller.signal }).then(
-              (csv) => ({ csv, error: null }),
-              (err: unknown) => {
-                if (isAbort(err)) throw err;
-                return { csv: null, error: toSheetError(err) };
-              },
-            )
-          : Promise.resolve({ csv: null, error: null });
-
-        const [matchesCsv, roster] = await Promise.all([
+        const [matchesCsv, roster, doubles] = await Promise.all([
           fetchSheetCsv(ref, { signal: controller.signal }),
-          rosterRequest,
+          optionalTab(rosterGid),
+          optionalTab(doublesGid),
         ]);
         if (requestId !== requestRef.current) return; // superseded by a newer request
 
-        // One failed roster read should not strip grades and injury holds off the board
-        // until the next poll; keep the last roster that loaded for this source.
-        const previous = loadedRef.current?.source === source ? loadedRef.current.rosterCsv : null;
-        const rosterCsv = roster.csv ?? (roster.error ? previous : null);
+        // One failed read of an optional tab should not strip roster details or the
+        // doubles ladder off the board until the next poll; keep the last copy that loaded.
+        const previous = loadedRef.current?.source === source ? loadedRef.current : null;
+        const rosterCsv = roster.csv ?? (roster.error ? (previous?.rosterCsv ?? null) : null);
+        const doublesCsv = doubles.csv ?? (doubles.error ? (previous?.doublesCsv ?? null) : null);
 
-        const next: LoadedSheet = { source, matchesCsv, rosterCsv, updatedAt: new Date(), fromCache: false };
+        const next: LoadedSheet = {
+          source,
+          matchesCsv,
+          rosterCsv,
+          doublesCsv,
+          updatedAt: new Date(),
+          fromCache: false,
+        };
         loadedRef.current = next;
         setLoaded(next);
-        setFailure(roster.error ? { source, error: null, rosterError: roster.error } : null);
-        writeCache(cacheKey, { matchesCsv, rosterCsv, savedAt: Date.now() });
+        setFailure(
+          roster.error || doubles.error
+            ? { source, error: null, rosterError: roster.error, doublesError: doubles.error }
+            : null,
+        );
+        writeCache(cacheKey, { matchesCsv, rosterCsv, doublesCsv, savedAt: Date.now() });
       } catch (err) {
         if (isAbort(err) || requestId !== requestRef.current) return;
         // Keep showing the last good ladder; surface the error alongside it rather
@@ -195,6 +224,7 @@ export function useLiveSheet(
           source,
           error: toSheetError(err),
           rosterError: f?.source === source ? f.rosterError : null,
+          doublesError: f?.source === source ? f.doublesError : null,
         }));
       } finally {
         if (requestId === requestRef.current) setRefreshing(false);
@@ -202,7 +232,7 @@ export function useLiveSheet(
     })();
 
     return () => controller.abort();
-  }, [sheetId, gid, rosterGid, source, nonce]);
+  }, [sheetId, gid, rosterGid, doublesGid, source, nonce]);
 
   // Timer-driven refresh while visible, plus refresh on refocus and reconnect.
   useEffect(() => {
@@ -234,10 +264,12 @@ export function useLiveSheet(
   return {
     matchesCsv: current?.matchesCsv ?? null,
     rosterCsv: current?.rosterCsv ?? null,
+    doublesCsv: current?.doublesCsv ?? null,
     loading: Boolean(source) && !current && !currentFailure?.error,
     refreshing,
     error: currentFailure?.error ?? null,
     rosterError: currentFailure?.rosterError ?? null,
+    doublesError: currentFailure?.doublesError ?? null,
     lastUpdated: current?.updatedAt ?? null,
     fromCache: current?.fromCache ?? false,
     refresh,

@@ -5,13 +5,16 @@ import {
   detectRosterMapping,
   mapMatches,
   mapRoster,
+  pairKey,
   parseActiveStatus,
   parseApproval,
   parseDate,
   parseDivision,
+  parseFormat,
   parseGrade,
   parseTeam,
   playerKey,
+  splitPair,
   validateMapping,
 } from '../lib/schema';
 
@@ -310,6 +313,74 @@ describe('mapMatches', () => {
     const r = mapMatches(t, detectMatchMapping(t), { strictScores: false, now: new Date(2026, 8, 4) });
     expect(r.matches).toHaveLength(1);
     expect(r.issues.some((i) => i.code === 'future-date' && i.sheetRow === 2)).toBe(true);
+  });
+});
+
+describe('doubles', () => {
+  const mapFrom = (csv: string, options: Partial<Parameters<typeof mapMatches>[2]> = {}) => {
+    const t = table(csv);
+    return mapMatches(t, detectMatchMapping(t), { strictScores: false, ...options });
+  };
+
+  it('reads format values and pair notation', () => {
+    expect(parseFormat('Doubles')).toBe('doubles');
+    expect(parseFormat('D')).toBe('doubles');
+    expect(parseFormat('Mixed doubles')).toBe('doubles');
+    expect(parseFormat('singles')).toBe('singles');
+    expect(parseFormat('')).toBeNull();
+    expect(parseFormat('Exhibition')).toBeNull();
+    expect(splitPair('Jake Whitmore / Marcus Webb')).toEqual(['Jake Whitmore', 'Marcus Webb']);
+    expect(splitPair('Jake & Marcus')).toEqual(['Jake', 'Marcus']);
+    expect(splitPair('Jake+Marcus')).toEqual(['Jake', 'Marcus']);
+    expect(splitPair('Jake Whitmore')).toBeNull();
+    expect(splitPair('Jake / Marcus / Pedro')).toBe('invalid');
+    expect(splitPair('Jake /')).toBe('invalid');
+  });
+
+  it('gives a pair the same key whichever partner is written first', () => {
+    expect(pairKey(['marcus', 'jake'])).toBe(pairKey(['jake', 'marcus']));
+    expect(pairKey(['jake', 'marcus'])).not.toBe('jake');
+  });
+
+  it('reads a row written as pairs as a doubles match between two teams', () => {
+    const r = mapFrom('Pair 1,Pair 2,Score\nJake / Marcus,Pedro & adrian,"6-4, 6-3"\nmarcus / JAKE,Adrian / Pedro,"3-6, 2-6"');
+    expect(r.issues).toEqual([]);
+    expect(r.matches).toHaveLength(2);
+    const [first, second] = r.matches;
+    expect(first!.format).toBe('doubles');
+    expect(first!.partnersA).toEqual(['jake', 'marcus']);
+    expect(first!.playerA).toBe(second!.playerA); // same pair, partners written in either order
+    expect(first!.playerB).toBe(second!.playerB);
+    expect(r.displayNames.get(first!.playerA)).toBe('Jake / Marcus');
+    expect(r.displayNames.get(first!.playerB)).toBe('Adrian / Pedro');
+    expect(r.pairPartners.get(first!.playerB)).toEqual(['adrian', 'pedro']);
+  });
+
+  it('uses a Format column, and forces doubles on the Doubles tab', () => {
+    const marked = mapFrom('Type,Person 1,Person 2,Score\nDoubles,Jake / Marcus,Pedro / Adrian,6-4\nSingles,Jake,Pedro,6-2');
+    expect(marked.matches.map((m) => m.format)).toEqual(['doubles', 'singles']);
+
+    const tab = mapFrom('Pair 1,Pair 2,Score\nJake,Pedro,6-4', { format: 'doubles', tab: 'Doubles tab', idPrefix: 'd' });
+    expect(tab.matches).toHaveLength(0);
+    expect(tab.issues[0]).toMatchObject({ code: 'doubles-needs-pairs', tab: 'Doubles tab', sheetRow: 2 });
+  });
+
+  it('refuses rows that mix a pair with a single player, or list one player twice', () => {
+    expect(mapFrom('Person 1,Person 2,Score\nJake / Marcus,Pedro,6-4').issues[0]!.code).toBe('doubles-needs-pairs');
+    expect(mapFrom('Person 1,Person 2,Score\nJake / Marcus,Pedro / jake,6-4').issues[0]!.code).toBe('self-match');
+    expect(mapFrom('Type,Person 1,Person 2,Score\nSingles,Jake / Marcus,Pedro,6-4').issues[0]!.code).toBe('singles-has-pair');
+  });
+
+  it('accepts a Winner cell naming the whole pair or just one partner', () => {
+    const r = mapFrom('Pair 1,Pair 2,Winner,Score\nJake / Marcus,Pedro / Adrian,Adrian,6-4\nJake / Marcus,Pedro / Adrian,Marcus / Jake,4-6');
+    expect(r.matches.map((m) => m.winner)).toEqual(['b', 'a']);
+    expect(r.issues.map((i) => i.code)).toEqual(['winner-mismatch', 'winner-mismatch']);
+  });
+
+  it('records a score-less doubles row as an open challenge between pairs', () => {
+    const r = mapFrom('Pair 1,Pair 2,Score\nJake / Marcus,Pedro / Adrian,');
+    expect(r.openChallenges).toHaveLength(1);
+    expect(r.openChallenges[0]!.challengerKey).toBe(pairKey(['jake', 'marcus']));
   });
 });
 

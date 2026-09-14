@@ -250,16 +250,48 @@ whose earlier sets are split. This is exactly the case QA test TC-2.2.1 checks.
 
 ---
 
-## 10. Where this lives in the code
+## 10. Doubles
+
+A doubles match is a row where either side is written as a pair — `Jake Whitmore / Marcus
+Webb` (also `&` or `+`) — or a row on the Doubles tab, or a row whose `Format` column says
+Doubles.
+
+- **A pair is one entity.** It gets its own rating, record, streak and ladder position
+  through exactly the same engine as a singles player. Partner order does not matter.
+- **Doubles never touches singles.** Pairs and individual players are ranked on separate
+  ladders, so a doubles result cannot change anyone's singles rating or record.
+- **Team.** A pair belongs to the team both partners share (from the Roster tab, or from
+  the matches they have played). Partners from different teams form a **Mixed** pair. When
+  neither partner's team is known, the row's `Team` value is used.
+- **Status.** A pair is on **Injury Hold** when either partner is injured, and inactive
+  when either is inactive. Challenges between pairs follow the same eligibility rules as
+  singles.
+- **Rows that cannot be a doubles match are skipped and reported**: one side with a single
+  player, a side naming three people, or the same player on both sides.
+
+---
+
+## 11. Rank over time
+
+A player's rank-over-time chart is not a stored log. For each day they played, the app
+rebuilds the ladder using only the counted results dated on or before that day, rated as
+of that day, and records where the player stood. It therefore follows the same rules as
+the movement arrows (section 6): corrected scores change the history, rejected results
+never appear in it, and undated results cannot be placed in time.
+
+---
+
+## 12. Where this lives in the code
 
 | Concern | File |
 |---|---|
 | Score parsing and validation | `src/lib/score.ts` |
 | Rating engine | `src/lib/rating.ts` |
-| Ladder order, tiebreakers, movement | `src/lib/ladder.ts` |
+| Ladder order, tiebreakers, movement, rank history | `src/lib/ladder.ts` |
 | Records and streaks | `src/lib/stats.ts` |
 | Challenge eligibility | `src/lib/challenge.ts` |
 | Spotlight metrics | `src/lib/leaders.ts` |
-| Column detection | `src/lib/schema.ts` |
+| Column detection, doubles pairs | `src/lib/schema.ts` |
+| Singles and doubles boards | `src/lib/dashboard.ts` |
 
 Every rule in this document is covered by a test in `src/__tests__/`.

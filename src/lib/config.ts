@@ -20,6 +20,8 @@ export interface AppState {
   gid: string | null;
   /** Optional tab gid for a Roster sheet. */
   rosterGid: string | null;
+  /** Optional tab gid for a tab of doubles results. */
+  doublesGid: string | null;
   config: LadderConfig;
   /** Coach view unlocked. See the security note in README - this gates UI, not data. */
   coach: boolean;
@@ -31,7 +33,10 @@ export interface AppState {
    * exactly the sheet the coach had to fix by hand.
    */
   mapping: Partial<MatchMapping>;
-  /** The ladder tab being viewed (e.g. "Girls"). Kept in the address bar, not in shared links. */
+  /**
+   * The ladder being viewed - a board id such as "Girls:doubles", or a bare team name from
+   * older links. Kept in the address bar, never in shared or published links.
+   */
   ladder: string | null;
 }
 
@@ -41,6 +46,7 @@ export const DEFAULT_APP_STATE: AppState = {
   sheetId: null,
   gid: null,
   rosterGid: null,
+  doublesGid: null,
   config: { ...DEFAULT_LADDER_CONFIG },
   coach: false,
   refreshSeconds: DEFAULT_REFRESH_SECONDS,
@@ -52,6 +58,7 @@ const PARAM = {
   sheet: 'sheet',
   gid: 'gid',
   rosterGid: 'roster',
+  doublesGid: 'doubles',
   coach: 'coach',
   refresh: 'refresh',
   challengeRange: 'range',
@@ -112,6 +119,7 @@ export function readAppState(search: string): AppState {
     sheetId: p.get(PARAM.sheet),
     gid: p.get(PARAM.gid),
     rosterGid: p.get(PARAM.rosterGid),
+    doublesGid: p.get(PARAM.doublesGid),
     coach: bool(p.get(PARAM.coach), false),
     refreshSeconds: num(p.get(PARAM.refresh), DEFAULT_REFRESH_SECONDS, 10, 3600),
     config: {
@@ -141,6 +149,7 @@ export function writeAppState(state: AppState): string {
   if (state.sheetId) p.set(PARAM.sheet, state.sheetId);
   if (state.gid) p.set(PARAM.gid, state.gid);
   if (state.rosterGid) p.set(PARAM.rosterGid, state.rosterGid);
+  if (state.doublesGid) p.set(PARAM.doublesGid, state.doublesGid);
   if (state.refreshSeconds !== DEFAULT_REFRESH_SECONDS) {
     p.set(PARAM.refresh, String(state.refreshSeconds));
   }
@@ -218,6 +227,7 @@ export function recallSheet(): AppState | null {
       sheetId: parsed.sheetId,
       gid: typeof parsed.gid === 'string' ? parsed.gid : null,
       rosterGid: typeof parsed.rosterGid === 'string' ? parsed.rosterGid : null,
+      doublesGid: null,
     };
   } catch {
     return null;

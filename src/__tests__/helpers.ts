@@ -30,6 +30,7 @@ export function match(
     playerB: playerKey(b),
     displayA: a,
     displayB: b,
+    format: 'singles',
     score: parsed,
     winner: parsed.winner,
     date: options.date ?? null,

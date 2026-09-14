@@ -36,6 +36,11 @@ describe('column mapping in the link', () => {
 });
 
 describe('shared links', () => {
+  it('carries the Roster and Doubles tabs', () => {
+    const s = readAppState(writeAppState(state({ sheetId: 'abc', rosterGid: '12', doublesGid: '34' })));
+    expect([s.rosterGid, s.doublesGid]).toEqual(['12', '34']);
+  });
+
   it('keeps the open ladder tab in the address bar', () => {
     expect(readAppState(writeAppState(state({ sheetId: 'abc', ladder: 'Girls' }))).ladder).toBe('Girls');
   });

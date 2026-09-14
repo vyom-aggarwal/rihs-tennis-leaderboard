@@ -1,0 +1,38 @@
+name: Production monitor
+
+# Hourly check that the live site loads and has a published ladder. Set the repository
+# variable PRODUCTION_URL (Settings -> Secrets and variables -> Actions -> Variables),
+# e.g. https://rihs-tennis.vercel.app - until then this workflow skips itself.
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ vars.PRODUCTION_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Site, publishing API and published ladder
+        env:
+          BASE: ${{ vars.PRODUCTION_URL }}
+        run: |
+          set -euo pipefail
+          base="${BASE%/}"
+
+          home=$(curl --fail --silent --show-error --location --retry 2 "$base/")
+          grep -q '<title>RIHS Tennis Ladder</title>' <<<"$home" || { echo "Home page did not look like the ladder app" >&2; exit 1; }
+
+          status=$(curl --fail --silent --show-error --retry 2 "$base/api/ladder")
+          echo "$status"
+          node -e '
+            const s = JSON.parse(process.argv[1]);
+            if (s.publishing !== "ready") { console.error("Publishing is not ready: " + s.publishing); process.exit(1); }
+            if (!s.published) { console.error("Nothing is published."); process.exit(1); }
+            console.log("Published " + s.published.publishedAt + (s.published.note ? " - " + s.published.note : ""));
+          ' "$status"

@@ -60,17 +60,29 @@ export interface DataIssue {
   message: string;
   /** 1-based row number as it appears in the coach's Google Sheet (header = row 1). */
   sheetRow?: number;
+  /** Which tab the row is on, when it is not the main match tab (e.g. "Doubles tab"). */
+  tab?: string;
   context?: string;
 }
+
+export type MatchFormat = 'singles' | 'doubles';
 
 /** A single match after parsing and validation. */
 export interface Match {
   id: string;
   sheetRow: number;
-  playerA: string; // normalized key
-  playerB: string; // normalized key
+  /**
+   * Normalized key of each side. For doubles this is the pair's key (see
+   * schema.ts:pairKey), so a pair is ranked as one entity on its own ladder.
+   */
+  playerA: string;
+  playerB: string;
   displayA: string;
   displayB: string;
+  format: MatchFormat;
+  /** Doubles only: the two partners' individual player keys on each side. */
+  partnersA?: [string, string];
+  partnersB?: [string, string];
   score: ParsedScore;
   /** 'a' | 'b'. Matches with no decidable winner are never promoted to a Match. */
   winner: 'a' | 'b';

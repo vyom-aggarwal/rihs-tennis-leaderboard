@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--", "--port", "5180", "--strictPort"],
       "port": 5180
+    },
+    {
+      "name": "rihs-e2e-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["e2e/server.mjs"],
+      "port": 4173
     }
   ]
 }

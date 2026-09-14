@@ -21,6 +21,7 @@ import type {
   Division,
   GradeLevel,
   Match,
+  MatchFormat,
   RosterEntry,
 } from './types';
 
@@ -33,6 +34,7 @@ export type MatchField =
   | 'winner'
   | 'date'
   | 'team'
+  | 'format'
   | 'approval'
   | 'isChallenge'
   | 'notes';
@@ -68,6 +70,9 @@ const MATCH_PATTERNS: Pattern[] = [
   // --- Player name columns ---
   { field: 'playerA', score: 80, test: eq('person 1', 'player 1', 'p1', 'player a', 'challenger', 'home', 'name 1', 'player one') },
   { field: 'playerB', score: 80, test: eq('person 2', 'player 2', 'p2', 'player b', 'defender', 'away', 'opponent', 'name 2', 'player two') },
+  // Doubles sheets name sides as pairs or teams.
+  { field: 'playerA', score: 80, test: eq('pair 1', 'pair a', 'team 1', 'team a', 'side 1', 'doubles team 1') },
+  { field: 'playerB', score: 80, test: eq('pair 2', 'pair b', 'team 2', 'team b', 'side 2', 'doubles team 2') },
   { field: 'playerA', score: 60, test: (h) => /(player|person|name|athlete)/.test(h) && /\b(1|a|one)\b/.test(h) },
   { field: 'playerB', score: 60, test: (h) => /(player|person|name|athlete)/.test(h) && /\b(2|b|two)\b/.test(h) },
   { field: 'playerA', score: 55, test: eq('challenger id', 'challenger name') },
@@ -78,7 +83,8 @@ const MATCH_PATTERNS: Pattern[] = [
   { field: 'date', score: 75, test: eq('date', 'match date', 'played', 'played on', 'when', 'timestamp', 'match_date', 'day') },
   { field: 'team', score: 75, test: eq('team', 'gender', 'program', 'ladder', 'squad', 'team gender', 'boys girls', 'group') },
   { field: 'approval', score: 75, test: eq('status', 'approval', 'approval status', 'verified', 'coach approval', 'approved') },
-  { field: 'isChallenge', score: 75, test: eq('challenge', 'is challenge', 'match type', 'type') },
+  { field: 'format', score: 75, test: eq('format', 'match type', 'type', 'event', 'singles doubles', 'singles or doubles', 'category') },
+  { field: 'isChallenge', score: 75, test: eq('challenge', 'is challenge', 'ladder challenge') },
   { field: 'notes', score: 70, test: eq('notes', 'note', 'comment', 'comments', 'remarks', 'court') },
 ];
 
@@ -91,6 +97,7 @@ export const EMPTY_MATCH_MAPPING: MatchMapping = {
   winner: -1,
   date: -1,
   team: -1,
+  format: -1,
   approval: -1,
   isChallenge: -1,
   notes: -1,
@@ -307,6 +314,64 @@ function parseBoolish(value: string | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Doubles
+// ---------------------------------------------------------------------------
+
+/** "Doubles", "D", "Mixed doubles" -> doubles; "Singles", "S" -> singles; anything else unknown. */
+export function parseFormat(value: string | undefined): MatchFormat | null {
+  if (isBlank(value)) return null;
+  const t = value!.trim().toLowerCase();
+  if (/^(d|dbl|dbls)$/.test(t) || /double/.test(t)) return 'doubles';
+  if (/^(s|sgl|sgls)$/.test(t) || /single/.test(t)) return 'singles';
+  return null;
+}
+
+/**
+ * Split a doubles side written as "Jake Whitmore / Marcus Webb" (also "&" or "+").
+ * Returns null when the cell names one player, and 'invalid' when it uses a separator
+ * but does not name exactly two people.
+ */
+export function splitPair(name: string): [string, string] | 'invalid' | null {
+  if (!/[/&+]/.test(name)) return null;
+  const parts = name.split(/\s*[/&+]\s*/).map((p) => p.trim());
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return 'invalid';
+  return [parts[0], parts[1]];
+}
+
+/**
+ * Stable key for a doubles pair. Partner order does not matter - "Jake / Marcus" and
+ * "Marcus / Jake" are the same pair - and the prefix keeps pair keys from ever colliding
+ * with an individual player's key.
+ */
+export function pairKey(partners: readonly [string, string]): string {
+  return 'pair:' + [...partners].sort().join(' + ');
+}
+
+/** Which side a Winner cell names: a whole pair, one partner of a pair, or a singles player. */
+function winnerSide(
+  text: string,
+  keyA: string,
+  keyB: string,
+  partnersA?: [string, string],
+  partnersB?: [string, string],
+): 'a' | 'b' | null {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (partnersA && partnersB) {
+    const pair = splitPair(clean);
+    if (Array.isArray(pair)) {
+      const key = pairKey([playerKey(pair[0]), playerKey(pair[1])]);
+      return key === keyA ? 'a' : key === keyB ? 'b' : null;
+    }
+    const key = playerKey(clean);
+    if (partnersA.includes(key)) return 'a';
+    if (partnersB.includes(key)) return 'b';
+    return null;
+  }
+  const key = playerKey(clean);
+  return key === keyA ? 'a' : key === keyB ? 'b' : null;
+}
+
+// ---------------------------------------------------------------------------
 // Match row mapping
 // ---------------------------------------------------------------------------
 
@@ -315,8 +380,21 @@ export interface MappedMatches {
   /** Rows naming two players with no score yet - issued challenges awaiting a result. */
   openChallenges: OpenChallenge[];
   issues: DataIssue[];
-  /** Display name chosen for each player key (the most frequent spelling seen). */
+  /** Display name chosen for each player key (the most frequent spelling seen), and for each pair key. */
   displayNames: Map<string, string>;
+  /** Doubles: each pair key's two partner keys, in sorted order. */
+  pairPartners: Map<string, [string, string]>;
+}
+
+export interface MapMatchesOptions {
+  strictScores: boolean;
+  now?: Date;
+  /** Format for rows with no Format column value - 'doubles' on a dedicated Doubles tab. */
+  format?: MatchFormat;
+  /** Match id prefix, so rows from two tabs never share an id. Defaults to "r". */
+  idPrefix?: string;
+  /** Tab name recorded on every issue, when this is not the main match tab. */
+  tab?: string;
 }
 
 /**
@@ -324,16 +402,20 @@ export interface MappedMatches {
  *
  * Rows that cannot yield a winner are never silently dropped - each one produces a
  * DataIssue that the Data Health panel shows the coach, with its sheet row number.
+ *
+ * A row is doubles when its Format column says so, when it is on the Doubles tab, or
+ * when either side is written as a pair ("Jake / Marcus"); otherwise it is singles.
  */
 export function mapMatches(
   table: CsvTable,
   mapping: MatchMapping,
-  options: { strictScores: boolean; now?: Date },
+  options: MapMatchesOptions,
 ): MappedMatches {
   const matches: Match[] = [];
   const openChallenges: OpenChallenge[] = [];
   const issues: DataIssue[] = [];
   const nameCounts = new Map<string, Map<string, number>>();
+  const pairPartners = new Map<string, [string, string]>();
   const reference = options.now ?? new Date();
 
   const cell = (row: string[], index: number): string | undefined =>
@@ -368,18 +450,74 @@ export function mapMatches(
 
     const displayA = rawA!.replace(/\s+/g, ' ').trim();
     const displayB = rawB!.replace(/\s+/g, ' ').trim();
-    const keyA = playerKey(displayA);
-    const keyB = playerKey(displayB);
+    const context = displayA + ' vs ' + displayB;
 
-    if (keyA === keyB) {
-      issues.push({
-        severity: 'error',
-        code: 'self-match',
-        sheetRow,
-        message: 'Row skipped: both columns name the same player.',
-        context: displayA,
-      });
-      return;
+    const sideA = splitPair(displayA);
+    const sideB = splitPair(displayB);
+    const format: MatchFormat =
+      parseFormat(cell(row, mapping.format)) ?? options.format ?? (sideA || sideB ? 'doubles' : 'singles');
+
+    let keyA: string;
+    let keyB: string;
+    let partnersA: [string, string] | undefined;
+    let partnersB: [string, string] | undefined;
+    // Every individual spelling on this row, counted toward that player's display name.
+    const spellings: Array<[string, string]> = [];
+
+    if (format === 'doubles') {
+      if (!Array.isArray(sideA) || !Array.isArray(sideB)) {
+        issues.push({
+          severity: 'error',
+          code: 'doubles-needs-pairs',
+          sheetRow,
+          message:
+            'Row skipped: a doubles match needs two players on each side, written like "Jake Whitmore / Marcus Webb".',
+          context,
+        });
+        return;
+      }
+      partnersA = [playerKey(sideA[0]), playerKey(sideA[1])];
+      partnersB = [playerKey(sideB[0]), playerKey(sideB[1])];
+      const everyone = [...partnersA, ...partnersB];
+      if (new Set(everyone).size !== everyone.length) {
+        issues.push({
+          severity: 'error',
+          code: 'self-match',
+          sheetRow,
+          message: 'Row skipped: the same player is listed twice in this doubles match.',
+          context,
+        });
+        return;
+      }
+      keyA = pairKey(partnersA);
+      keyB = pairKey(partnersB);
+      pairPartners.set(keyA, [...partnersA].sort() as [string, string]);
+      pairPartners.set(keyB, [...partnersB].sort() as [string, string]);
+      spellings.push([partnersA[0], sideA[0]], [partnersA[1], sideA[1]], [partnersB[0], sideB[0]], [partnersB[1], sideB[1]]);
+    } else {
+      if (sideA || sideB) {
+        issues.push({
+          severity: 'error',
+          code: 'singles-has-pair',
+          sheetRow,
+          message: 'Row skipped: this row is marked Singles but lists two players on one side.',
+          context,
+        });
+        return;
+      }
+      keyA = playerKey(displayA);
+      keyB = playerKey(displayB);
+      if (keyA === keyB) {
+        issues.push({
+          severity: 'error',
+          code: 'self-match',
+          sheetRow,
+          message: 'Row skipped: both columns name the same player.',
+          context: displayA,
+        });
+        return;
+      }
+      spellings.push([keyA, displayA], [keyB, displayB]);
     }
 
     const summary = cell(row, mapping.scoreSummary);
@@ -395,17 +533,16 @@ export function mapMatches(
         code: 'bad-date',
         sheetRow,
         message: 'Could not read the date "' + dateCell!.trim() + '". This match is treated as undated.',
-        context: displayA + ' vs ' + displayB,
+        context,
       });
     }
 
     // Two names and no result at all is a challenge that has been issued but not yet
-    // played - the only way a read-only sheet can record one. It gives both players the
+    // played - the only way a read-only sheet can record one. It gives both sides the
     // "Challenge Pending" badge until a score is typed into the same row.
     if (isBlank(summary) && isBlank(scoreCellA) && isBlank(scoreCellB) && isBlank(winnerCell)) {
       if (parseApproval(cell(row, mapping.approval)) !== 'Rejected') {
-        noteName(keyA, displayA);
-        noteName(keyB, displayB);
+        for (const [key, spelling] of spellings) noteName(key, spelling);
         openChallenges.push({ challengerKey: keyA, defenderKey: keyB, createdAt: date, sheetRow });
       }
       return;
@@ -422,7 +559,7 @@ export function mapMatches(
         code: 'unparseable-score',
         sheetRow,
         message: 'Row skipped: no score could be read for this match.',
-        context: displayA + ' vs ' + displayB,
+        context,
       });
       return;
     }
@@ -434,7 +571,7 @@ export function mapMatches(
         code: 'score-format',
         sheetRow,
         message: warning,
-        context: displayA + ' vs ' + displayB + ' (' + score.raw + ')',
+        context: context + ' (' + score.raw + ')',
       });
     }
     if (!check.valid) {
@@ -444,7 +581,7 @@ export function mapMatches(
           code: 'invalid-score',
           sheetRow,
           message: 'Row skipped: ' + error,
-          context: displayA + ' vs ' + displayB + ' (' + score.raw + ')',
+          context: context + ' (' + score.raw + ')',
         });
       }
       return;
@@ -454,9 +591,8 @@ export function mapMatches(
     // it almost always means the score columns are the wrong way round.
     let winner = score.winner!;
     if (!isBlank(winnerCell)) {
-      const wk = playerKey(winnerCell!);
-      if (wk === keyA || wk === keyB) {
-        const stated: 'a' | 'b' = wk === keyA ? 'a' : 'b';
+      const stated = winnerSide(winnerCell!, keyA, keyB, partnersA, partnersB);
+      if (stated) {
         if (stated !== winner) {
           issues.push({
             severity: 'warning',
@@ -467,8 +603,8 @@ export function mapMatches(
               winnerCell!.trim() +
               ' but the score ' +
               score.raw +
-              ' favours the other player. Using the Winner column.',
-            context: displayA + ' vs ' + displayB,
+              ' favours the other side. Using the Winner column.',
+            context,
           });
         }
         winner = stated;
@@ -480,8 +616,10 @@ export function mapMatches(
           message:
             'The Winner column names "' +
             winnerCell!.trim() +
-            '", who is not one of the two players in this row. Using the score instead.',
-          context: displayA + ' vs ' + displayB,
+            (format === 'doubles'
+              ? '", who is not on either pair in this row. Using the score instead.'
+              : '", who is not one of the two players in this row. Using the score instead.'),
+          context,
         });
       }
     }
@@ -495,20 +633,21 @@ export function mapMatches(
         sheetRow,
         message:
           'The date "' + dateCell!.trim() + '" is in the future - check the year. The match still counts.',
-        context: displayA + ' vs ' + displayB,
+        context,
       });
     }
 
-    noteName(keyA, displayA);
-    noteName(keyB, displayB);
+    for (const [key, spelling] of spellings) noteName(key, spelling);
 
     matches.push({
-      id: 'r' + sheetRow,
+      id: (options.idPrefix ?? 'r') + sheetRow,
       sheetRow,
       playerA: keyA,
       playerB: keyB,
       displayA,
       displayB,
+      format,
+      ...(partnersA && partnersB ? { partnersA, partnersB } : {}),
       score,
       winner,
       date,
@@ -531,8 +670,12 @@ export function mapMatches(
     )[0];
     displayNames.set(key, best ? best[0] : key);
   }
+  for (const [key, partners] of pairPartners) {
+    displayNames.set(key, partners.map((k) => displayNames.get(k) ?? k).join(' / '));
+  }
 
-  return { matches, openChallenges, issues, displayNames };
+  const tagged = options.tab ? issues.map((issue) => ({ ...issue, tab: options.tab })) : issues;
+  return { matches, openChallenges, issues: tagged, displayNames, pairPartners };
 }
 
 // ---------------------------------------------------------------------------

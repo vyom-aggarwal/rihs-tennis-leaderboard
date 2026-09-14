@@ -10,14 +10,18 @@ import { SheetError } from '../lib/sheets';
 import { sheetIdFromUrl } from '../hooks/useLiveSheet';
 
 interface Props {
+  /** 'server': the coach publishes to the site. 'link': the coach shares a settings link. */
+  mode?: 'server' | 'link';
   onSubmit: (sheetId: string, gid: string | null) => void;
   onTryDemo: () => void;
   initialValue?: string;
   recalled?: { sheetId: string; gid: string | null } | null;
   onResume?: () => void;
+  /** Return to the published ladder without changing anything. */
+  onCancel?: () => void;
 }
 
-export function Setup({ onSubmit, onTryDemo, initialValue = '', recalled, onResume }: Props) {
+export function Setup({ mode = 'link', onSubmit, onTryDemo, initialValue = '', recalled, onResume, onCancel }: Props) {
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,8 +54,17 @@ export function Setup({ onSubmit, onTryDemo, initialValue = '', recalled, onResu
             Copy the address from your browser and paste it below.
           </li>
           <li>
-            Send the team the link this app gives you afterwards — they will see the same ladder,
-            live.
+            {mode === 'server' ? (
+              <>
+                Check the preview, then press <strong>Publish to team</strong>. Everyone sees it at
+                this site&rsquo;s address, live.
+              </>
+            ) : (
+              <>
+                Send the team the link this app gives you afterwards — they will see the same ladder,
+                live.
+              </>
+            )}
           </li>
         </ol>
 
@@ -90,23 +103,29 @@ export function Setup({ onSubmit, onTryDemo, initialValue = '', recalled, onResu
 
           <div className="row">
             <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
-              Build the ladder
+              {mode === 'server' ? 'Preview the ladder' : 'Build the ladder'}
             </button>
             <button type="button" className="btn" onClick={onTryDemo}>
               See a demo first
             </button>
-            {recalled && onResume && (
+            {mode === 'link' && recalled && onResume && (
               <button type="button" className="btn" onClick={onResume}>
                 Reopen last sheet
+              </button>
+            )}
+            {onCancel && (
+              <button type="button" className="btn" onClick={onCancel}>
+                Cancel
               </button>
             )}
           </div>
         </form>
 
         <div className="notice notice-info" style={{ marginTop: 20, marginBottom: 0 }}>
-          <strong>Nothing is uploaded anywhere</strong>
-          The dashboard runs entirely in the browser and reads your sheet directly from Google.
-          There is no server and no copy of your roster held by this app.
+          <strong>Your results stay in your sheet</strong>
+          {mode === 'server'
+            ? 'The dashboard reads your sheet directly from Google in each viewer’s browser. When you publish, this site saves only the sheet’s link and your ladder settings — no copy of your roster or results.'
+            : 'The dashboard runs entirely in the browser and reads your sheet directly from Google. There is no server and no copy of your roster held by this app.'}
         </div>
       </div>
     </div>

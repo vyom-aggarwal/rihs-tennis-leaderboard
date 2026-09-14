@@ -6,7 +6,8 @@
  * the demo season, edit that script and re-run it.
  */
 
+import DEMO_DOUBLES_CSV from '../sample-data/demo-doubles.csv?raw';
 import DEMO_MATCHES_CSV from '../sample-data/demo-matches.csv?raw';
 import DEMO_ROSTER_CSV from '../sample-data/demo-roster.csv?raw';
 
-export { DEMO_MATCHES_CSV, DEMO_ROSTER_CSV };
+export { DEMO_DOUBLES_CSV, DEMO_MATCHES_CSV, DEMO_ROSTER_CSV };
