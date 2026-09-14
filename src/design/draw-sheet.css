@@ -569,7 +569,7 @@
 
 .ds-rating-none { color: var(--ds-muted-2); font-weight: 600; }
 
-/* ----------------------------------------------------------- leaders spotlight */
+/* ------------------------------------------------------- leaderboards */
 
 .ds-section-title {
   margin: 26px 0 0;
@@ -579,57 +579,6 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ds-muted);
-}
-
-.ds-podium {
-  list-style: none;
-  margin: 0 0 6px;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-top: 1px solid var(--ds-hairline-strong);
-  border-bottom: 1px solid var(--ds-hairline-strong);
-}
-
-.ds-podium li + li { border-left: 1px solid var(--ds-hairline); }
-
-.ds-podium-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 14px 12px;
-  text-align: left;
-  transition: background 0.15s ease;
-}
-
-.ds-podium-item:hover { background: rgba(23, 21, 15, 0.025); }
-
-.ds-podium-place {
-  flex: none;
-  min-width: 26px;
-  font-family: var(--ds-font-display);
-  font-size: 14px;
-  color: var(--ds-muted);
-}
-
-.ds-podium-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.ds-podium-name {
-  font-family: var(--ds-font-display);
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--ds-ink);
-  overflow-wrap: anywhere;
-}
-
-.ds-podium-meta {
-  font-size: 12.5px;
-  color: var(--ds-ink-soft);
 }
 
 .ds-boards {
@@ -669,8 +618,7 @@
   overflow-wrap: anywhere;
 }
 
-.ds-board-name:hover,
-.ds-podium-item:hover .ds-podium-name {
+.ds-board-name:hover {
   text-decoration: underline;
   text-decoration-color: var(--ds-hairline-strong);
   text-underline-offset: 3px;
@@ -936,7 +884,7 @@
   .ds-dialog-backdrop,
   .ds-tab[aria-selected='false'] { display: none !important; }
   .ds-row { break-inside: avoid; }
-  .ds-podium, .ds-boards, .ds-upcoming { break-inside: avoid; }
+  .ds-boards, .ds-upcoming { break-inside: avoid; }
 }
 
 @media (max-width: 640px) {
@@ -944,8 +892,4 @@
   .ds-status-inline { display: block; margin-top: 4px; }
   .ds-avatar { width: 26px; height: 26px; font-size: 10px; }
   .ds-player-wrap { gap: 8px; }
-
-  .ds-podium { grid-template-columns: 1fr; }
-  .ds-podium li + li { border-left: none; border-top: 1px solid var(--ds-hairline); }
-  .ds-podium-item { padding: 10px 0; }
 }

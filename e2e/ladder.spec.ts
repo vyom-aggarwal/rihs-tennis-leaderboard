@@ -21,7 +21,7 @@ test('TC-1.1.1: Boys and Girls tabs switch in under 500ms without a reload', asy
   await page.evaluate(() => ((window as unknown as { marker: number }).marker = 1));
   const started = Date.now();
   await girls.click();
-  await expect(page.locator('.ds-podium-name').first()).toHaveText('Maya Lindqvist');
+  await expect(page.locator('.ds-row .ds-player-name').first()).toHaveText('Maya Lindqvist');
   expect(Date.now() - started).toBeLessThan(500);
 
   await expect(girls).toHaveAttribute('aria-selected', 'true');
@@ -50,8 +50,9 @@ test('TC-2.1.1: an injured or already-challenged player cannot be challenged', a
   await expect(page.getByText('Ranks 1–3 are more than 3 spots ahead', { exact: false })).toBeVisible();
 });
 
-test('opens a player from the spotlight and shows their rank over time', async ({ page }) => {
-  await page.locator('.ds-podium-item').first().click();
+test('has no top-three spotlight, and opens a player from a leaderboard with their rank over time', async ({ page }) => {
+  await expect(page.getByText('Leaders spotlight')).toHaveCount(0);
+  await page.locator('.ds-board-name').first().click();
   const detail = page.locator('.ds-detail-row');
   await expect(detail).toBeVisible();
   await expect(detail.getByRole('img', { name: /Rank over time/ })).toBeVisible();

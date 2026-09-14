@@ -66,8 +66,7 @@ switch when doubles results exist. Doubles pairs are ranked as teams.
 Challenge Pending / Injury Hold badge, record and rating on every row. Tap a player for
 their stats, rank over time, recent matches, and who they may challenge.
 
-**Leaders spotlight** — top three, Most Wins, Longest Active Streak, and Top Climber over
-30 days.
+**Leaderboards** — Most Wins, Longest Active Streak, and Top Climber over 30 days.
 
 **Real movement and rank history** — the ladder is rebuilt as it stood on any past day
 from the same counted results, so arrows and each player's rank-over-time chart stay
@@ -210,7 +209,7 @@ src/lib/          ranking core in plain TypeScript, no React
   ladder.ts       ordering, tiebreakers, movement, rank history, ladder modes
   stats.ts        records, streaks, head-to-head
   challenge.ts    eligibility rules
-  leaders.ts      spotlight metrics
+  leaders.ts      leaderboard metrics
   schema.ts       column detection, row mapping, doubles pairs
   csv.ts          RFC 4180 parser
   sheets.ts       Google Sheets endpoints and error handling

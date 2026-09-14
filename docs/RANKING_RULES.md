@@ -290,7 +290,7 @@ never appear in it, and undated results cannot be placed in time.
 | Ladder order, tiebreakers, movement, rank history | `src/lib/ladder.ts` |
 | Records and streaks | `src/lib/stats.ts` |
 | Challenge eligibility | `src/lib/challenge.ts` |
-| Spotlight metrics | `src/lib/leaders.ts` |
+| Leaderboard metrics | `src/lib/leaders.ts` |
 | Column detection, doubles pairs | `src/lib/schema.ts` |
 | Singles and doubles boards | `src/lib/dashboard.ts` |
 

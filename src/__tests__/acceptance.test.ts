@@ -193,15 +193,9 @@ describe('TC-1.2 positions, movement and status (AC-1.2.1, AC-1.2.2, AC-1.2.3)',
 });
 
 // ---------------------------------------------------------------------------
-// PRD 6.2: Leaders Spotlight
+// PRD 6.2: performance leaderboards
 // ---------------------------------------------------------------------------
-describe('PRD 6.2 leaders spotlight', () => {
-  it('spotlights the top three of each ladder', () => {
-    for (const board of demo().boards) {
-      expect(board.leaders.topThree.map((s) => s.rank)).toEqual([1, 2, 3]);
-    }
-  });
-
+describe('PRD 6.2 performance leaderboards', () => {
   it('ranks Most Wins by actual win count', () => {
     for (const board of demo().boards) {
       const wins = board.leaders.mostWins.map((l) => l.value);

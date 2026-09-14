@@ -11,7 +11,8 @@
  *   AC-1.1.1-3  ladder tabs, with a solid underline on the active tab
  *   AC-1.2.1    rank, avatar, name, grade, division, status and movement on every row
  *   AC-1.2.3    distinct Available / Challenge Pending / Injury Hold badges
- *   PRD 6.2     top-three spotlight plus Most Wins, Longest Active Streak and Top Climber
+ *   PRD 6.2     Most Wins, Longest Active Streak and Top Climber (the top-three spotlight
+ *               was removed at the team's request; ranks 1-3 head the table)
  *   AC-2.1.1-2  each player's expanded row lists who they may challenge, and why not
  *   PRD 9       doubles ladders, behind a Singles / Doubles switch
  */
@@ -39,7 +40,7 @@ export interface DrawSheetDivision {
   id: string;
   label: string;
   standings: StandingRow[];
-  /** Spotlight and performance leaderboards for this ladder (PRD 6.2). */
+  /** Performance leaderboards for this ladder (PRD 6.2). */
   leaders?: Leaders;
   /** Boards sharing a group sit under one ladder tab and differ only by format. */
   group?: string;
@@ -131,7 +132,7 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
     : null;
   const format: MatchFormat = activeDivision?.format ?? 'singles';
 
-  // Choosing a name in the spotlight opens that player's row and brings it into view.
+  // Choosing a name on a leaderboard opens that player's row and brings it into view.
   useEffect(() => {
     if (!scrollToKey) return;
     const selector =
@@ -237,9 +238,6 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
             {(props.issues ?? []).map((issue, i) => (
               <IssueNotice key={i} issue={issue} />
             ))}
-            {activeDivision.leaders && activeDivision.leaders.topThree.length > 0 && (
-              <Podium rows={activeDivision.leaders.topThree} onSelect={selectPlayer} />
-            )}
             <Table
               standings={activeDivision.standings}
               format={format}
@@ -286,36 +284,7 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
   );
 }
 
-// --------------------------------------------------------------------- spotlight
-
-const PLACE = ['1st', '2nd', '3rd'];
-
-function Podium({ rows, onSelect }: { rows: StandingRow[]; onSelect: (key: string) => void }) {
-  return (
-    <section className="ds-spotlight" aria-labelledby="ds-spotlight-title">
-      <h2 className="ds-section-title" id="ds-spotlight-title">
-        Leaders spotlight
-      </h2>
-      <ol className="ds-podium">
-        {rows.map((r, i) => (
-          <li key={r.key}>
-            <button className="ds-podium-item" onClick={() => onSelect(r.key)}>
-              <span className="ds-podium-place">{PLACE[i]}</span>
-              <Avatar row={r} />
-              <span className="ds-podium-body">
-                <span className="ds-podium-name">{r.displayName}</span>
-                <span className="ds-podium-meta ds-num">
-                  {r.record.matches > 0 ? r.rating.toFixed(2) + ' · ' : ''}
-                  {r.record.wins}–{r.record.losses}
-                </span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
+// ------------------------------------------------------------------ leaderboards
 
 function Leaderboards({
   leaders,

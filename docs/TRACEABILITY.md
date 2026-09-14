@@ -17,12 +17,12 @@ are in `e2e/` and run on desktop and mobile Chrome.
 | AC | Requirement | Implementation | Test | Status |
 |---|---|---|---|---|
 | AC-1.1.1 | Prominent Boys / Girls tabs | Ladder tablist · `ladder.ts:listTeams` | `acceptance.test.ts` "produces separate Boys and Girls ladders" · `e2e/ladder.spec.ts` TC-1.1.1 | Done |
-| AC-1.1.2 | Tab switch < 500ms, no reload | All boards — standings and spotlight — computed in one `buildDashboard` pass and held in memory; switching is a state change | `e2e/ladder.spec.ts` TC-1.1.1 measures the switch and checks the document did not reload | Done |
+| AC-1.1.2 | Tab switch < 500ms, no reload | All boards — standings and leaderboards — computed in one `buildDashboard` pass and held in memory; switching is a state change | `e2e/ladder.spec.ts` TC-1.1.1 measures the switch and checks the document did not reload | Done |
 | AC-1.1.3 | High-contrast active tab | `draw-sheet.css` `.ds-tab[aria-selected='true']` — ink text, bold weight and a solid 2px ink underline; inactive tabs are muted | `e2e/ladder.spec.ts` TC-1.1.1 checks the selected state moves | Done |
 
 **TC-1.1.1** — passes, automated. Both tabs visible; switching re-renders standings and
-spotlight from memory in under 500ms with no reload; the active tab takes the underline and
-the other loses it.
+leaderboards from memory in under 500ms with no reload; the active tab takes the underline
+and the other loses it.
 
 ---
 
@@ -108,10 +108,10 @@ and score edits are attributed by Google Sheets' own version history.
 | 5 | Parents & AD: read-only ladder | Public ladder at the site's address, no sign-in | Done |
 | 6.1 | Dual ladder standings | `dashboard.ts` per-team boards | Done |
 | 6.1 | Rank, movement, status badges | Standings row and Status column | Done |
-| 6.2 | Top 3 spotlight cards | `Podium` in `DrawSheetLeaderboard.tsx` | Done |
+| 6.2 | Top 3 spotlight cards | Removed at the team's request after review; ranks 1–3 head the standings table | Not built |
 | 6.2 | Most Wins / Longest Active Streak / Top Climber | `leaders.ts` · `Leaderboards` | Done |
 | 6.3 | Challenge workflow | Eligibility engine, open challenges and upcoming matches from sheet rows | Partial |
-| 7 | Mobile-first responsive | Status badge under the name, stacked spotlight and leaderboards under 640px | Done — `e2e/mobile.spec.ts` checks no horizontal overflow |
+| 7 | Mobile-first responsive | Status badge under the name, stacked leaderboards under 640px | Done — `e2e/mobile.spec.ts` checks no horizontal overflow |
 | 7 | Under 2s on 4G | ~87 KB gzipped HTML, CSS and JS; web fonts load without blocking first paint; cache-first repeat loads | Done |
 | 7 | Student data privacy | No accounts; the site stores only the sheet link and settings | Done |
 | 8 | PLAYER entity | `RosterEntry` in `types.ts` | Done |
