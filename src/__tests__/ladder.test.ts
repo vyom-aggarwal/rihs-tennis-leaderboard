@@ -6,6 +6,7 @@ import {
   countableMatches,
   listTeams,
   matchesForTeam,
+  rankTimeline,
   resolveTeams,
 } from '../lib/ladder';
 import { computeRatings } from '../lib/rating';
@@ -205,6 +206,27 @@ describe('buildLadder', () => {
     expect(ana.previousRank!).toBeGreaterThan(ana.rank);
   });
 
+  it('builds the past ladder from counted results only, so a rejected result moves no arrows', () => {
+    const now = new Date('2026-09-01T12:00:00Z');
+    const matches = [
+      match('Bea', 'Ana', '6-0', { date: daysAgo(60, now) }),
+      // Three results the coach rejected. Counted in the past ladder, they would put Ana
+      // ahead 30 days ago and show her dropping a place she never held.
+      match('Ana', 'Bea', '6-0', { date: daysAgo(45, now), approval: 'Rejected' }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(44, now), approval: 'Rejected' }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(43, now), approval: 'Rejected' }),
+    ];
+    const result = buildLadder({
+      matches,
+      roster: new Map(),
+      displayNames: names('Ana', 'Bea'),
+      config,
+      now,
+    });
+    expect(order(result.standings)).toEqual(['Bea', 'Ana']);
+    for (const row of result.standings) expect(row.movement).toBe(0);
+  });
+
   it('reports no movement at all when the sheet has no dates', () => {
     const result = buildLadder({
       matches: [match('Ana', 'Bea', '6-1'), match('Bea', 'Cat', '6-2')],
@@ -238,6 +260,36 @@ describe('buildLadder', () => {
         config,
       });
     expect(order(build().standings)).toEqual(order(build().standings));
+  });
+});
+
+describe('rankTimeline', () => {
+  const now = new Date('2026-09-01T12:00:00Z');
+
+  it("tracks a player's position at the end of each day they played", () => {
+    const matches = [
+      match('Bea', 'Ana', '6-0', { date: daysAgo(20, now) }),
+      match('Bea', 'Cat', '6-1', { date: daysAgo(15, now) }),
+      match('Ana', 'Bea', '6-0', { date: daysAgo(10, now) }),
+      match('Ana', 'Cat', '6-0', { date: daysAgo(5, now) }),
+    ];
+    const input = { matches, roster: new Map(), displayNames: names('Ana', 'Bea', 'Cat'), config, now };
+    const points = rankTimeline(matches, input, k('Ana'));
+    expect(points.map((p) => [p.rank, p.of])).toEqual([
+      [2, 2], // lost to Bea: second of two
+      [1, 3], // beat Bea: top of three
+      [1, 3],
+    ]);
+    expect(points.map((p) => p.date.getTime())).toEqual([...points.map((p) => p.date.getTime())].sort((a, b) => a - b));
+  });
+
+  it('has nothing to plot for an undated sheet or a rejected-only history', () => {
+    const undated = [match('Ana', 'Bea', '6-1'), match('Bea', 'Ana', '6-2')];
+    const input = { matches: undated, roster: new Map(), displayNames: names('Ana', 'Bea'), config, now };
+    expect(rankTimeline(undated, input, k('Ana'))).toEqual([]);
+
+    const rejected = [match('Ana', 'Bea', '6-1', { date: daysAgo(3, now), approval: 'Rejected' })];
+    expect(rankTimeline(rejected, { ...input, matches: rejected }, k('Ana'))).toEqual([]);
   });
 });
 

@@ -161,9 +161,15 @@ A challenge is legal when **all** of these hold:
 - Neither player is on **Injury Hold** or **Inactive**.
 - Neither player already has an **open challenge**.
 - The pair is past the **cooling-off period** since they last played (default 7 days).
+  A result awaiting verification counts as having played; a rejected one does not.
 
-The app shows every player above the challenger, with a reason next to each one who cannot
-be challenged, rather than quietly shortening the list.
+An **open challenge** is a row in the match sheet that names both players but has no score
+and no winner yet. It gives both players the *Challenge Pending* badge until the score is
+entered in that row. A Status of `Cancelled`, `Declined` or `Withdrawn` withdraws it.
+
+The app lists every player within range of the challenger, with a reason next to each one
+who cannot be challenged rather than quietly shortening the list, and says how many
+players above that are out of range.
 
 ---
 
@@ -171,6 +177,8 @@ be challenged, rather than quietly shortening the list.
 
 Movement is **not** a stored "previous rank". The app rebuilds the entire ladder as it
 stood *N* days ago (default 30) using only matches on or before that date, and compares.
+The past ladder uses exactly the same counted results as today's (section 7), so a result
+the coach has rejected never moves an arrow.
 
 This means arrows stay correct even if a coach corrects an old score — the history is
 recomputed rather than carrying a stale number forward.
@@ -185,9 +193,11 @@ inventing movement would be a fabrication.
 | Status column | Counted? |
 |---|---|
 | Empty / missing | Yes — your sheet is the record of truth |
-| `Verified`, `Approved`, `Confirmed` | Yes |
-| `Pending`, `Awaiting`, `Submitted` | Configurable (counted by default) |
-| `Rejected`, `Void`, `Disputed` | Never |
+| `Verified`, `Approved`, `Confirmed`, a ticked checkbox (`TRUE`) | Yes |
+| `Pending`, `Awaiting`, `Submitted`, `No`, `Not verified`, an unticked checkbox (`FALSE`) | Configurable (counted by default) |
+| `Rejected`, `Void`, `Disputed`, `Cancelled`, `Declined`, `Withdrawn` | Never |
+
+A row with no score at all is not a result — it is an open challenge (section 5).
 
 Turn off *Count results marked Pending* in the coach console to require your verification
 before a result moves anyone.
@@ -208,7 +218,14 @@ The dashboard never silently drops or silently "fixes" a row. Everything below a
 | The set is not a completed set (6-5) | **Counted, with a warning** (or skipped in strict mode) |
 | `Winner` column disagrees with the score | Winner column wins, disagreement reported |
 | A player is in results but not on the roster | Counted, flagged as a likely misspelling |
+| A date is in the future | Counted, flagged as a likely mistyped year |
+| A date cannot be read | Counted as undated, reported |
 | Part of the squad has never played the rest | Ranked, but the ambiguity is reported |
+
+Dates are read as `YYYY-MM-DD`, `M/D/YYYY` (or `D/M/YYYY` when the first number can only
+be a day), a Google Sheets date serial number, or a written date. A date typed without a
+year is placed on the nearest such day. Impossible dates such as `2/30` are reported
+rather than rolled over into the next month.
 
 That last one matters. If your ladder splits into two groups who have never played anyone
 in the other group, **no algorithm can order them against each other** — the data simply
@@ -233,16 +250,48 @@ whose earlier sets are split. This is exactly the case QA test TC-2.2.1 checks.
 
 ---
 
-## 10. Where this lives in the code
+## 10. Doubles
+
+A doubles match is a row where either side is written as a pair — `Jake Whitmore / Marcus
+Webb` (also `&` or `+`) — or a row on the Doubles tab, or a row whose `Format` column says
+Doubles.
+
+- **A pair is one entity.** It gets its own rating, record, streak and ladder position
+  through exactly the same engine as a singles player. Partner order does not matter.
+- **Doubles never touches singles.** Pairs and individual players are ranked on separate
+  ladders, so a doubles result cannot change anyone's singles rating or record.
+- **Team.** A pair belongs to the team both partners share (from the Roster tab, or from
+  the matches they have played). Partners from different teams form a **Mixed** pair. When
+  neither partner's team is known, the row's `Team` value is used.
+- **Status.** A pair is on **Injury Hold** when either partner is injured, and inactive
+  when either is inactive. Challenges between pairs follow the same eligibility rules as
+  singles.
+- **Rows that cannot be a doubles match are skipped and reported**: one side with a single
+  player, a side naming three people, or the same player on both sides.
+
+---
+
+## 11. Rank over time
+
+A player's rank-over-time chart is not a stored log. For each day they played, the app
+rebuilds the ladder using only the counted results dated on or before that day, rated as
+of that day, and records where the player stood. It therefore follows the same rules as
+the movement arrows (section 6): corrected scores change the history, rejected results
+never appear in it, and undated results cannot be placed in time.
+
+---
+
+## 12. Where this lives in the code
 
 | Concern | File |
 |---|---|
 | Score parsing and validation | `src/lib/score.ts` |
 | Rating engine | `src/lib/rating.ts` |
-| Ladder order, tiebreakers, movement | `src/lib/ladder.ts` |
+| Ladder order, tiebreakers, movement, rank history | `src/lib/ladder.ts` |
 | Records and streaks | `src/lib/stats.ts` |
 | Challenge eligibility | `src/lib/challenge.ts` |
-| Spotlight metrics | `src/lib/leaders.ts` |
-| Column detection | `src/lib/schema.ts` |
+| Leaderboard metrics | `src/lib/leaders.ts` |
+| Column detection, doubles pairs | `src/lib/schema.ts` |
+| Singles and doubles boards | `src/lib/dashboard.ts` |
 
 Every rule in this document is covered by a test in `src/__tests__/`.

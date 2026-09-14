@@ -226,17 +226,69 @@ export function historicalOrder(
   const now = input.now ?? new Date();
   const cutoff = new Date(now.getTime() - days * 86_400_000);
 
+  const order = orderAsOf(matches, input, cutoff);
+  if (!order) return null;
+
+  const ranks = new Map<string, number>();
+  order.forEach((key, i) => ranks.set(key, i + 1));
+  return ranks;
+}
+
+/**
+ * The ladder order using only dated matches on or before `cutoff`, rated as of that
+ * moment. Null when no match was played by then.
+ */
+export function orderAsOf(matches: Match[], input: BuildLadderInput, cutoff: Date): string[] | null {
   const past = matches.filter((m) => m.date !== null && m.date.getTime() <= cutoff.getTime());
   if (past.length === 0) return null;
 
   const ratings = computeRatings({ matches: past, config: input.config, now: cutoff }).ratings;
   const stats = computeStats(past);
   const players = [...new Set(past.flatMap((m) => [m.playerA, m.playerB]))];
-  const order = orderPlayers(players, past, input, ratings, stats);
+  return orderPlayers(players, past, input, ratings, stats);
+}
 
-  const ranks = new Map<string, number>();
-  order.forEach((key, i) => ranks.set(key, i + 1));
-  return ranks;
+export interface RankPoint {
+  /** End of the day the position was reached. */
+  date: Date;
+  rank: number;
+  /** How many players were on the ladder at that point. */
+  of: number;
+}
+
+/**
+ * A player's ladder position at the end of each day they played - the rank-over-time
+ * chart. Recomputed from the counted results rather than stored, so it stays true after
+ * a coach corrects an old score. Undated results cannot be placed in time and are skipped.
+ */
+export function rankTimeline(
+  matches: Match[],
+  input: BuildLadderInput,
+  key: string,
+  maxPoints = 12,
+): RankPoint[] {
+  const counted = countableMatches(matches, input.config);
+  const days = [
+    ...new Set(
+      counted
+        .filter((m) => m.date !== null && (m.playerA === key || m.playerB === key))
+        .map((m) => {
+          const end = new Date(m.date!);
+          end.setHours(23, 59, 59, 999);
+          return end.getTime();
+        }),
+    ),
+  ]
+    .sort((a, b) => a - b)
+    .slice(-maxPoints);
+
+  const points: RankPoint[] = [];
+  for (const day of days) {
+    const order = orderAsOf(counted, input, new Date(day));
+    const index = order ? order.indexOf(key) : -1;
+    if (order && index >= 0) points.push({ date: new Date(day), rank: index + 1, of: order.length });
+  }
+  return points;
 }
 
 /**
@@ -291,7 +343,9 @@ export function buildLadder(input: BuildLadderInput): LadderResult {
   }
 
   const order = orderPlayers(players, matches, input, ratings, stats);
-  const previous = historicalOrder(input.matches, input, config.movementWindowDays);
+  // The past ladder must be built from the same countable matches as today's, or a
+  // rejected result would still move the arrows.
+  const previous = historicalOrder(matches, input, config.movementWindowDays);
   const pending = input.pendingChallengeKeys ?? new Set<string>();
 
   const standings: StandingRow[] = order.map((key, index) => {

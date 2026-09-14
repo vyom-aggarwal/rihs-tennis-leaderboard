@@ -1,5 +1,5 @@
 /**
- * Leaders Spotlight metrics (PRD 6.2).
+ * Performance leaderboard metrics (PRD 6.2).
  *
  * Every leaderboard here resolves ties deterministically and reports the full tied set
  * rather than silently picking one player - "Most Wins" showing one name when two players
@@ -20,15 +20,9 @@ export interface LeaderEntry {
 }
 
 export interface Leaders {
-  topThree: StandingRow[];
   mostWins: LeaderEntry[];
   longestStreak: LeaderEntry[];
   topClimber: LeaderEntry[];
-}
-
-/** Top of the ladder - the spotlight cards (PRD 6.2). */
-export function topThree(standings: StandingRow[]): StandingRow[] {
-  return standings.slice(0, 3);
 }
 
 function pickLeaders(
@@ -104,7 +98,6 @@ export function topClimber(standings: StandingRow[], windowDays: number, limit =
 
 export function computeLeaders(standings: StandingRow[], windowDays: number): Leaders {
   return {
-    topThree: topThree(standings),
     mostWins: mostWins(standings),
     longestStreak: longestActiveStreak(standings),
     topClimber: topClimber(standings, windowDays),

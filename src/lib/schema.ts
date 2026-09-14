@@ -11,6 +11,7 @@
  * that cannot be corrected is worse than no auto-detection at all.
  */
 
+import type { OpenChallenge } from './challenge';
 import type { CsvTable } from './csv';
 import { parseGameColumns, parseScoreString, validateScore } from './score';
 import type {
@@ -20,6 +21,7 @@ import type {
   Division,
   GradeLevel,
   Match,
+  MatchFormat,
   RosterEntry,
 } from './types';
 
@@ -32,6 +34,7 @@ export type MatchField =
   | 'winner'
   | 'date'
   | 'team'
+  | 'format'
   | 'approval'
   | 'isChallenge'
   | 'notes';
@@ -67,6 +70,9 @@ const MATCH_PATTERNS: Pattern[] = [
   // --- Player name columns ---
   { field: 'playerA', score: 80, test: eq('person 1', 'player 1', 'p1', 'player a', 'challenger', 'home', 'name 1', 'player one') },
   { field: 'playerB', score: 80, test: eq('person 2', 'player 2', 'p2', 'player b', 'defender', 'away', 'opponent', 'name 2', 'player two') },
+  // Doubles sheets name sides as pairs or teams.
+  { field: 'playerA', score: 80, test: eq('pair 1', 'pair a', 'team 1', 'team a', 'side 1', 'doubles team 1') },
+  { field: 'playerB', score: 80, test: eq('pair 2', 'pair b', 'team 2', 'team b', 'side 2', 'doubles team 2') },
   { field: 'playerA', score: 60, test: (h) => /(player|person|name|athlete)/.test(h) && /\b(1|a|one)\b/.test(h) },
   { field: 'playerB', score: 60, test: (h) => /(player|person|name|athlete)/.test(h) && /\b(2|b|two)\b/.test(h) },
   { field: 'playerA', score: 55, test: eq('challenger id', 'challenger name') },
@@ -77,7 +83,8 @@ const MATCH_PATTERNS: Pattern[] = [
   { field: 'date', score: 75, test: eq('date', 'match date', 'played', 'played on', 'when', 'timestamp', 'match_date', 'day') },
   { field: 'team', score: 75, test: eq('team', 'gender', 'program', 'ladder', 'squad', 'team gender', 'boys girls', 'group') },
   { field: 'approval', score: 75, test: eq('status', 'approval', 'approval status', 'verified', 'coach approval', 'approved') },
-  { field: 'isChallenge', score: 75, test: eq('challenge', 'is challenge', 'match type', 'type') },
+  { field: 'format', score: 75, test: eq('format', 'match type', 'type', 'event', 'singles doubles', 'singles or doubles', 'category') },
+  { field: 'isChallenge', score: 75, test: eq('challenge', 'is challenge', 'ladder challenge') },
   { field: 'notes', score: 70, test: eq('notes', 'note', 'comment', 'comments', 'remarks', 'court') },
 ];
 
@@ -90,6 +97,7 @@ export const EMPTY_MATCH_MAPPING: MatchMapping = {
   winner: -1,
   date: -1,
   team: -1,
+  format: -1,
   approval: -1,
   isChallenge: -1,
   notes: -1,
@@ -184,28 +192,67 @@ function spellingQuality(name: string): number {
 // Value coercion
 // ---------------------------------------------------------------------------
 
-export function parseDate(value: string | undefined): Date | null {
+/** A calendar date, or null when the parts do not name a real day (Feb 30, month 13). */
+function calendarDate(year: number, month: number, day: number): Date | null {
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return d;
+}
+
+/**
+ * A date typed without a year ("9/3", "Sep 3") means the nearest such day to today, so
+ * a December result read in January lands in the right season.
+ */
+function nearestYear(month: number, day: number, reference: Date): Date | null {
+  const year = reference.getFullYear();
+  const candidate = calendarDate(year, month, day);
+  if (!candidate) return null;
+  const halfYear = 183 * 86_400_000;
+  const diff = candidate.getTime() - reference.getTime();
+  if (diff > halfYear) return calendarDate(year - 1, month, day);
+  if (diff < -halfYear) return calendarDate(year + 1, month, day);
+  return candidate;
+}
+
+/** Google Sheets serial day numbers count from 1899-12-30. */
+const SHEETS_EPOCH = { year: 1899, month: 12, day: 30 };
+
+export function parseDate(value: string | undefined, reference: Date = new Date()): Date | null {
   if (isBlank(value)) return null;
   const text = value!.trim();
 
   // Prefer explicit ISO, which sorts and parses unambiguously.
   const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) {
-    const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-    return Number.isNaN(d.getTime()) ? null : d;
+  if (iso) return calendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  // A date cell formatted as a plain number exports as its serial day count. Without
+  // this, `new Date("46268")` would read it as the year 46268.
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const serial = Math.floor(Number(text));
+    if (serial < 20000 || serial > 80000) return null; // 1954..2119 - anything else is not a date
+    return new Date(SHEETS_EPOCH.year, SHEETS_EPOCH.month - 1, SHEETS_EPOCH.day + serial);
   }
 
-  // US-style M/D/YYYY, which is what Google Sheets exports for US locales.
-  const us = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
-  if (us) {
-    let year = Number(us[3]);
+  // M/D/YYYY, which is what Google Sheets exports for US locales. A first number above
+  // 12 can only be a day, so D/M/YYYY sheets from other locales still read correctly
+  // instead of rolling "25/12" over into the following year.
+  const slash = text.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?(?![\d/-])/);
+  if (slash) {
+    let month = Number(slash[1]);
+    let day = Number(slash[2]);
+    if (month > 12 && day <= 12) [month, day] = [day, month];
+    if (!slash[3]) return nearestYear(month, day, reference);
+    let year = Number(slash[3]);
     if (year < 100) year += year < 70 ? 2000 : 1900;
-    const d = new Date(year, Number(us[1]) - 1, Number(us[2]));
-    return Number.isNaN(d.getTime()) ? null : d;
+    return calendarDate(year, month, day);
   }
 
   const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (Number.isNaN(parsed.getTime())) return null;
+  // Engines fill a missing year with 2001 ("Sep 3" -> 2001-09-03), which would make a
+  // current result look decades old.
+  if (!/\d{4}/.test(text)) return nearestYear(parsed.getMonth() + 1, parsed.getDate(), reference);
+  return parsed;
 }
 
 /** Map any of the ways a coach writes a team onto a stable label. */
@@ -241,17 +288,23 @@ export function parseGrade(value: string | undefined): GradeLevel {
 export function parseActiveStatus(value: string | undefined): ActiveStatus {
   if (isBlank(value)) return 'Active';
   const t = value!.trim().toLowerCase();
-  if (/injur|hurt|hold|out/.test(t)) return 'Injured';
-  if (/inactive|quit|left|removed|off|suspend/.test(t)) return 'Inactive';
+  // Whole words only: a substring test would put "Active without restrictions" on
+  // injury hold because it contains "out".
+  if (/\binjur|\bhurt\b|\bhold\b|\bout\b/.test(t)) return 'Injured';
+  if (/\binactive\b|\bnot active\b|\bquit\b|\bleft\b|\bremoved\b|\boff\b|\bsuspend/.test(t)) {
+    return 'Inactive';
+  }
   return 'Active';
 }
 
 export function parseApproval(value: string | undefined): ApprovalStatus {
   if (isBlank(value)) return 'Verified'; // no status column => the coach's sheet is the record
   const t = value!.trim().toLowerCase();
-  if (/reject|denied|void|invalid|disput/.test(t)) return 'Rejected';
-  if (/pend|await|review|unverified|submitted|new/.test(t)) return 'Pending';
-  if (/verif|approv|confirm|final|ok|yes|true|done/.test(t)) return 'Verified';
+  if (/reject|denied|declin|void|invalid|disput|cancel|withdr/.test(t)) return 'Rejected';
+  // An unticked "Verified" checkbox exports as FALSE, and "No" in an "Approved" column
+  // means exactly that. Neither may count as a verified result.
+  if (/^(no|n|false|0|unchecked)$/.test(t) || /\bnot\b/.test(t)) return 'Pending';
+  if (/pend|await|review|unverified|submitted|\bnew\b/.test(t)) return 'Pending';
   return 'Verified';
 }
 
@@ -261,14 +314,87 @@ function parseBoolish(value: string | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Doubles
+// ---------------------------------------------------------------------------
+
+/** "Doubles", "D", "Mixed doubles" -> doubles; "Singles", "S" -> singles; anything else unknown. */
+export function parseFormat(value: string | undefined): MatchFormat | null {
+  if (isBlank(value)) return null;
+  const t = value!.trim().toLowerCase();
+  if (/^(d|dbl|dbls)$/.test(t) || /double/.test(t)) return 'doubles';
+  if (/^(s|sgl|sgls)$/.test(t) || /single/.test(t)) return 'singles';
+  return null;
+}
+
+/**
+ * Split a doubles side written as "Jake Whitmore / Marcus Webb" (also "&" or "+").
+ * Returns null when the cell names one player, and 'invalid' when it uses a separator
+ * but does not name exactly two people.
+ */
+export function splitPair(name: string): [string, string] | 'invalid' | null {
+  if (!/[/&+]/.test(name)) return null;
+  const parts = name.split(/\s*[/&+]\s*/).map((p) => p.trim());
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return 'invalid';
+  return [parts[0], parts[1]];
+}
+
+/**
+ * Stable key for a doubles pair. Partner order does not matter - "Jake / Marcus" and
+ * "Marcus / Jake" are the same pair - and the prefix keeps pair keys from ever colliding
+ * with an individual player's key.
+ */
+export function pairKey(partners: readonly [string, string]): string {
+  return 'pair:' + [...partners].sort().join(' + ');
+}
+
+/** Which side a Winner cell names: a whole pair, one partner of a pair, or a singles player. */
+function winnerSide(
+  text: string,
+  keyA: string,
+  keyB: string,
+  partnersA?: [string, string],
+  partnersB?: [string, string],
+): 'a' | 'b' | null {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (partnersA && partnersB) {
+    const pair = splitPair(clean);
+    if (Array.isArray(pair)) {
+      const key = pairKey([playerKey(pair[0]), playerKey(pair[1])]);
+      return key === keyA ? 'a' : key === keyB ? 'b' : null;
+    }
+    const key = playerKey(clean);
+    if (partnersA.includes(key)) return 'a';
+    if (partnersB.includes(key)) return 'b';
+    return null;
+  }
+  const key = playerKey(clean);
+  return key === keyA ? 'a' : key === keyB ? 'b' : null;
+}
+
+// ---------------------------------------------------------------------------
 // Match row mapping
 // ---------------------------------------------------------------------------
 
 export interface MappedMatches {
   matches: Match[];
+  /** Rows naming two players with no score yet - issued challenges awaiting a result. */
+  openChallenges: OpenChallenge[];
   issues: DataIssue[];
-  /** Display name chosen for each player key (the most frequent spelling seen). */
+  /** Display name chosen for each player key (the most frequent spelling seen), and for each pair key. */
   displayNames: Map<string, string>;
+  /** Doubles: each pair key's two partner keys, in sorted order. */
+  pairPartners: Map<string, [string, string]>;
+}
+
+export interface MapMatchesOptions {
+  strictScores: boolean;
+  now?: Date;
+  /** Format for rows with no Format column value - 'doubles' on a dedicated Doubles tab. */
+  format?: MatchFormat;
+  /** Match id prefix, so rows from two tabs never share an id. Defaults to "r". */
+  idPrefix?: string;
+  /** Tab name recorded on every issue, when this is not the main match tab. */
+  tab?: string;
 }
 
 /**
@@ -276,15 +402,21 @@ export interface MappedMatches {
  *
  * Rows that cannot yield a winner are never silently dropped - each one produces a
  * DataIssue that the Data Health panel shows the coach, with its sheet row number.
+ *
+ * A row is doubles when its Format column says so, when it is on the Doubles tab, or
+ * when either side is written as a pair ("Jake / Marcus"); otherwise it is singles.
  */
 export function mapMatches(
   table: CsvTable,
   mapping: MatchMapping,
-  options: { strictScores: boolean },
+  options: MapMatchesOptions,
 ): MappedMatches {
   const matches: Match[] = [];
+  const openChallenges: OpenChallenge[] = [];
   const issues: DataIssue[] = [];
   const nameCounts = new Map<string, Map<string, number>>();
+  const pairPartners = new Map<string, [string, string]>();
+  const reference = options.now ?? new Date();
 
   const cell = (row: string[], index: number): string | undefined =>
     index >= 0 ? row[index] : undefined;
@@ -318,25 +450,108 @@ export function mapMatches(
 
     const displayA = rawA!.replace(/\s+/g, ' ').trim();
     const displayB = rawB!.replace(/\s+/g, ' ').trim();
-    const keyA = playerKey(displayA);
-    const keyB = playerKey(displayB);
+    const context = displayA + ' vs ' + displayB;
 
-    if (keyA === keyB) {
+    const sideA = splitPair(displayA);
+    const sideB = splitPair(displayB);
+    const format: MatchFormat =
+      parseFormat(cell(row, mapping.format)) ?? options.format ?? (sideA || sideB ? 'doubles' : 'singles');
+
+    let keyA: string;
+    let keyB: string;
+    let partnersA: [string, string] | undefined;
+    let partnersB: [string, string] | undefined;
+    // Every individual spelling on this row, counted toward that player's display name.
+    const spellings: Array<[string, string]> = [];
+
+    if (format === 'doubles') {
+      if (!Array.isArray(sideA) || !Array.isArray(sideB)) {
+        issues.push({
+          severity: 'error',
+          code: 'doubles-needs-pairs',
+          sheetRow,
+          message:
+            'Row skipped: a doubles match needs two players on each side, written like "Jake Whitmore / Marcus Webb".',
+          context,
+        });
+        return;
+      }
+      partnersA = [playerKey(sideA[0]), playerKey(sideA[1])];
+      partnersB = [playerKey(sideB[0]), playerKey(sideB[1])];
+      const everyone = [...partnersA, ...partnersB];
+      if (new Set(everyone).size !== everyone.length) {
+        issues.push({
+          severity: 'error',
+          code: 'self-match',
+          sheetRow,
+          message: 'Row skipped: the same player is listed twice in this doubles match.',
+          context,
+        });
+        return;
+      }
+      keyA = pairKey(partnersA);
+      keyB = pairKey(partnersB);
+      pairPartners.set(keyA, [...partnersA].sort() as [string, string]);
+      pairPartners.set(keyB, [...partnersB].sort() as [string, string]);
+      spellings.push([partnersA[0], sideA[0]], [partnersA[1], sideA[1]], [partnersB[0], sideB[0]], [partnersB[1], sideB[1]]);
+    } else {
+      if (sideA || sideB) {
+        issues.push({
+          severity: 'error',
+          code: 'singles-has-pair',
+          sheetRow,
+          message: 'Row skipped: this row is marked Singles but lists two players on one side.',
+          context,
+        });
+        return;
+      }
+      keyA = playerKey(displayA);
+      keyB = playerKey(displayB);
+      if (keyA === keyB) {
+        issues.push({
+          severity: 'error',
+          code: 'self-match',
+          sheetRow,
+          message: 'Row skipped: both columns name the same player.',
+          context: displayA,
+        });
+        return;
+      }
+      spellings.push([keyA, displayA], [keyB, displayB]);
+    }
+
+    const summary = cell(row, mapping.scoreSummary);
+    const scoreCellA = cell(row, mapping.scoreA);
+    const scoreCellB = cell(row, mapping.scoreB);
+    const winnerCell = cell(row, mapping.winner);
+
+    const dateCell = cell(row, mapping.date);
+    const date = parseDate(dateCell, reference);
+    if (!isBlank(dateCell) && date === null) {
       issues.push({
-        severity: 'error',
-        code: 'self-match',
+        severity: 'warning',
+        code: 'bad-date',
         sheetRow,
-        message: 'Row skipped: both columns name the same player.',
-        context: displayA,
+        message: 'Could not read the date "' + dateCell!.trim() + '". This match is treated as undated.',
+        context,
       });
+    }
+
+    // Two names and no result at all is a challenge that has been issued but not yet
+    // played - the only way a read-only sheet can record one. It gives both sides the
+    // "Challenge Pending" badge until a score is typed into the same row.
+    if (isBlank(summary) && isBlank(scoreCellA) && isBlank(scoreCellB) && isBlank(winnerCell)) {
+      if (parseApproval(cell(row, mapping.approval)) !== 'Rejected') {
+        for (const [key, spelling] of spellings) noteName(key, spelling);
+        openChallenges.push({ challengerKey: keyA, defenderKey: keyB, createdAt: date, sheetRow });
+      }
       return;
     }
 
     // Score: prefer a summary string when present, else the two numeric columns.
-    const summary = cell(row, mapping.scoreSummary);
     const score = !isBlank(summary)
       ? parseScoreString(summary!)
-      : parseGameColumns(cell(row, mapping.scoreA), cell(row, mapping.scoreB));
+      : parseGameColumns(scoreCellA, scoreCellB);
 
     if (!score) {
       issues.push({
@@ -344,7 +559,7 @@ export function mapMatches(
         code: 'unparseable-score',
         sheetRow,
         message: 'Row skipped: no score could be read for this match.',
-        context: displayA + ' vs ' + displayB,
+        context,
       });
       return;
     }
@@ -356,7 +571,7 @@ export function mapMatches(
         code: 'score-format',
         sheetRow,
         message: warning,
-        context: displayA + ' vs ' + displayB + ' (' + score.raw + ')',
+        context: context + ' (' + score.raw + ')',
       });
     }
     if (!check.valid) {
@@ -366,7 +581,7 @@ export function mapMatches(
           code: 'invalid-score',
           sheetRow,
           message: 'Row skipped: ' + error,
-          context: displayA + ' vs ' + displayB + ' (' + score.raw + ')',
+          context: context + ' (' + score.raw + ')',
         });
       }
       return;
@@ -375,11 +590,9 @@ export function mapMatches(
     // An explicit Winner column overrides the score, but a disagreement is reported -
     // it almost always means the score columns are the wrong way round.
     let winner = score.winner!;
-    const winnerCell = cell(row, mapping.winner);
     if (!isBlank(winnerCell)) {
-      const wk = playerKey(winnerCell!);
-      if (wk === keyA || wk === keyB) {
-        const stated: 'a' | 'b' = wk === keyA ? 'a' : 'b';
+      const stated = winnerSide(winnerCell!, keyA, keyB, partnersA, partnersB);
+      if (stated) {
         if (stated !== winner) {
           issues.push({
             severity: 'warning',
@@ -390,8 +603,8 @@ export function mapMatches(
               winnerCell!.trim() +
               ' but the score ' +
               score.raw +
-              ' favours the other player. Using the Winner column.',
-            context: displayA + ' vs ' + displayB,
+              ' favours the other side. Using the Winner column.',
+            context,
           });
         }
         winner = stated;
@@ -403,34 +616,38 @@ export function mapMatches(
           message:
             'The Winner column names "' +
             winnerCell!.trim() +
-            '", who is not one of the two players in this row. Using the score instead.',
-          context: displayA + ' vs ' + displayB,
+            (format === 'doubles'
+              ? '", who is not on either pair in this row. Using the score instead.'
+              : '", who is not one of the two players in this row. Using the score instead.'),
+          context,
         });
       }
     }
 
-    const dateCell = cell(row, mapping.date);
-    const date = parseDate(dateCell);
-    if (!isBlank(dateCell) && date === null) {
+    // A result cannot have been played in the future; this is nearly always a mistyped
+    // year, which would otherwise distort recency weighting and the movement arrows.
+    if (date && date.getTime() - reference.getTime() > 86_400_000) {
       issues.push({
         severity: 'warning',
-        code: 'bad-date',
+        code: 'future-date',
         sheetRow,
-        message: 'Could not read the date "' + dateCell!.trim() + '". This match is treated as undated.',
-        context: displayA + ' vs ' + displayB,
+        message:
+          'The date "' + dateCell!.trim() + '" is in the future - check the year. The match still counts.',
+        context,
       });
     }
 
-    noteName(keyA, displayA);
-    noteName(keyB, displayB);
+    for (const [key, spelling] of spellings) noteName(key, spelling);
 
     matches.push({
-      id: 'r' + sheetRow,
+      id: (options.idPrefix ?? 'r') + sheetRow,
       sheetRow,
       playerA: keyA,
       playerB: keyB,
       displayA,
       displayB,
+      format,
+      ...(partnersA && partnersB ? { partnersA, partnersB } : {}),
       score,
       winner,
       date,
@@ -453,8 +670,12 @@ export function mapMatches(
     )[0];
     displayNames.set(key, best ? best[0] : key);
   }
+  for (const [key, partners] of pairPartners) {
+    displayNames.set(key, partners.map((k) => displayNames.get(k) ?? k).join(' / '));
+  }
 
-  return { matches, issues, displayNames };
+  const tagged = options.tab ? issues.map((issue) => ({ ...issue, tab: options.tab })) : issues;
+  return { matches, openChallenges, issues: tagged, displayNames, pairPartners };
 }
 
 // ---------------------------------------------------------------------------

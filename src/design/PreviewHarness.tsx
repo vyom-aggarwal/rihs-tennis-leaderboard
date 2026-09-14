@@ -53,7 +53,7 @@ export function PreviewHarness() {
       </div>
 
       <DrawSheetLeaderboard
-        teamName="River Islands High School"
+        teamName="River Island High School"
         subtitle="Tennis Ladder"
         divisions={divisions}
         activeDivisionId={activeDivisionId}

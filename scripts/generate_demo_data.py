@@ -103,9 +103,10 @@ def play_set(gap: float) -> tuple[int, int]:
     return (winner_games, loser_games) if a_wins else (loser_games, winner_games)
 
 
-def play_match(a: str, b: str, when: date) -> str:
+def play_match(a: str, b: str, when: date, gap: float | None = None) -> str:
     """Best of three, third set replaced by a 10-point match tiebreak."""
-    gap = skill(a, when) - skill(b, when)
+    if gap is None:
+        gap = skill(a, when) - skill(b, when)
     sets: list[str] = []
     wins_a = wins_b = 0
 
@@ -205,6 +206,26 @@ def main() -> None:
         r["Status"] = "Pending"
     rows[-1]["Notes"] = "Court 3, finished after dark"
 
+    # Two challenges issued but not yet played: both players named, score left blank.
+    # They put "Challenge Pending" on both sides and block other challenges, so that
+    # state is visible in the demo. Each pair is within three spots and outside the
+    # seven-day cooling-off period on the demo's "today" (2026-09-04).
+    for team, challenger, defender in (
+        ("Boys", "Johnny Park", "Ethan Cole"),
+        ("Girls", "Zara Haddad", "Ava Thompson"),
+    ):
+        rows.append(
+            {
+                "Date": "2026-09-03",
+                "Team": team,
+                "Person 1": challenger,
+                "Person 2": defender,
+                "Score": "",
+                "Status": "",
+                "Notes": "Challenge issued",
+            }
+        )
+
     matches_path = OUT / "demo-matches.csv"
     with matches_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=["Date", "Team", "Person 1", "Person 2", "Score", "Status", "Notes"])
@@ -218,18 +239,78 @@ def main() -> None:
         for name, team, grade, division, _, _, status in PLAYERS:
             w.writerow([name, team, grade, division, status])
 
-    played = sum(1 for _ in rows)
-    print(f"Wrote {matches_path.name}: {played} matches")
+    results = [r for r in rows if r["Score"]]
+    print(f"Wrote {matches_path.name}: {len(results)} matches, {len(rows) - len(results)} open challenges")
     print(f"Wrote {roster_path.name}: {len(PLAYERS)} players")
 
     counts: dict[str, int] = {}
-    for r in rows:
+    for r in results:
         for key in ("Person 1", "Person 2"):
             counts[r[key]] = counts.get(r[key], 0) + 1
     thin = {n: c for n, c in counts.items() if c < 3}
     print("Matches per player:", dict(sorted(counts.items(), key=lambda kv: -kv[1])))
     if thin:
         print("Provisional (under 3 matches):", thin)
+
+    # Doubles run last, so the random draws above - and the singles CSV - are unchanged.
+    doubles = generate_doubles("Boys") + generate_doubles("Girls")
+    doubles.sort(key=lambda r: (r["Date"], r["Team"]))
+    doubles.append(
+        {
+            "Date": "2026-09-03",
+            "Team": "Boys",
+            "Pair 1": "Pedro Alvarez / Ravi Menon",
+            "Pair 2": "Johnny Park / Adrian Foster",
+            "Score": "",
+            "Status": "",
+        }
+    )
+    doubles_path = OUT / "demo-doubles.csv"
+    with doubles_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["Date", "Team", "Pair 1", "Pair 2", "Score", "Status"])
+        w.writeheader()
+        w.writerows(doubles)
+    print(f"Wrote {doubles_path.name}: {sum(1 for r in doubles if r['Score'])} doubles matches")
+
+
+# Doubles pairs for the demo's Doubles tab. Injured players (Marcus Webb, Lena Fischer)
+# and the late joiners sit these out.
+DOUBLES_PAIRS = {
+    "Boys": [
+        ("Jake Whitmore", "Mike Sullivan"),
+        ("Diego Ramirez", "Ethan Cole"),
+        ("Johnny Park", "Adrian Foster"),
+        ("Pedro Alvarez", "Ravi Menon"),
+    ],
+    "Girls": [
+        ("Sofia Ramos", "Chloe Bennett"),
+        ("Maya Lindqvist", "Nina Kowalski"),
+        ("Priya Raman", "Ava Thompson"),
+        ("Zara Haddad", "Bella Moreau"),
+    ],
+}
+
+
+def generate_doubles(team: str) -> list[dict]:
+    """Every pair meets every other pair twice; a pair plays at its partners' average skill."""
+    pairs = DOUBLES_PAIRS[team]
+    rows: list[dict] = []
+    for i, a in enumerate(pairs):
+        for b in pairs[i + 1 :]:
+            for _ in range(2):
+                when = random_date(SEASON_START, SEASON_END)
+                gap = (skill(a[0], when) + skill(a[1], when)) / 2 - (skill(b[0], when) + skill(b[1], when)) / 2
+                rows.append(
+                    {
+                        "Date": when.isoformat(),
+                        "Team": team,
+                        "Pair 1": " / ".join(a),
+                        "Pair 2": " / ".join(b),
+                        "Score": play_match(a[0], b[0], when, gap),
+                        "Status": "Verified",
+                    }
+                )
+    return rows
 
 
 if __name__ == "__main__":

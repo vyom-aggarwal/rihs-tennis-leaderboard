@@ -23,6 +23,7 @@ const config: LadderConfig = { ...DEFAULT_LADDER_CONFIG };
 
 const demoMatches = readFileSync('sample-data/demo-matches.csv', 'utf8');
 const demoRoster = readFileSync('sample-data/demo-roster.csv', 'utf8');
+const demoDoubles = readFileSync('sample-data/demo-doubles.csv', 'utf8');
 
 const demo = () =>
   buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, config, now: NOW });
@@ -155,18 +156,46 @@ describe('TC-1.2 positions, movement and status (AC-1.2.1, AC-1.2.2, AC-1.2.3)',
     expect(boys.find((s) => s.displayName === 'Pedro Alvarez')!.displayStatus).toBe('Challenge Pending');
     expect(boys.find((s) => s.displayName === 'Jake Whitmore')!.displayStatus).toBe('Available');
   });
+
+  it('reads open challenges straight from score-less rows in the sheet (AC-1.2.3)', () => {
+    const d = demo();
+    expect(d.openChallenges.map((c) => [c.challengerKey, c.defenderKey])).toEqual([
+      [k('Johnny Park'), k('Ethan Cole')],
+      [k('Zara Haddad'), k('Ava Thompson')],
+    ]);
+    const all = d.boards.flatMap((b) => b.standings);
+    const status = (name: string) => all.find((s) => s.displayName === name)!.displayStatus;
+    expect(status('Johnny Park')).toBe('Challenge Pending');
+    expect(status('Ethan Cole')).toBe('Challenge Pending');
+    expect(status('Zara Haddad')).toBe('Challenge Pending');
+    expect(status('Ava Thompson')).toBe('Challenge Pending');
+    expect(status('Jake Whitmore')).toBe('Available');
+    // An open challenge is not a result: nobody's record changes.
+    expect(d.matches.some((m) => m.playerA === k('Johnny Park') && m.playerB === k('Ethan Cole') && m.date?.getDate() === 3)).toBe(false);
+  });
+
+  it('blocks challenging a player whose challenge from the sheet is still open (AC-2.1.2)', () => {
+    const d = demo();
+    const rows = d.boards[0]!.standings;
+    const johnny = rows.find((s) => s.displayName === 'Johnny Park')!;
+    const below = rows.find((s) => s.rank === johnny.rank + 1)!;
+    const option = challengeOptions({
+      challengerKey: below.key,
+      standings: rows,
+      matches: d.matches,
+      config,
+      openChallenges: d.openChallenges,
+      now: NOW,
+    }).find((o) => o.key === johnny.key)!;
+    expect(option.eligible).toBe(false);
+    expect(option.reason).toMatch(/open challenge/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// PRD 6.2: Leaders Spotlight
+// PRD 6.2: performance leaderboards
 // ---------------------------------------------------------------------------
-describe('PRD 6.2 leaders spotlight', () => {
-  it('spotlights the top three of each ladder', () => {
-    for (const board of demo().boards) {
-      expect(board.leaders.topThree.map((s) => s.rank)).toEqual([1, 2, 3]);
-    }
-  });
-
+describe('PRD 6.2 performance leaderboards', () => {
   it('ranks Most Wins by actual win count', () => {
     for (const board of demo().boards) {
       const wins = board.leaders.mostWins.map((l) => l.value);
@@ -279,6 +308,80 @@ describe('TC-2.2 score entry and verification (AC-2.2.1, AC-2.2.2, AC-2.2.3)', (
 });
 
 // ---------------------------------------------------------------------------
+// Doubles ladders (PRD 9, v2.0 scope)
+// ---------------------------------------------------------------------------
+describe('doubles ladders', () => {
+  const withDoubles = () =>
+    buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, doublesCsv: demoDoubles, config, now: NOW });
+
+  it('adds Boys and Girls doubles boards from the Doubles tab, with no errors', () => {
+    const d = withDoubles();
+    expect(d.boards.map((b) => b.label)).toEqual(['Boys Ladder', 'Girls Ladder', 'Boys Doubles', 'Girls Doubles']);
+    expect(d.boards.map((b) => b.id)).toEqual(['Boys:singles', 'Girls:singles', 'Boys:doubles', 'Girls:doubles']);
+    expect(d.issues.filter((i) => i.severity === 'error')).toEqual([]);
+    for (const board of d.boards.filter((b) => b.format === 'doubles')) {
+      expect(board.standings).toHaveLength(4);
+      expect(board.standings.every((s) => s.displayName.includes(' / '))).toBe(true);
+    }
+  });
+
+  it('never lets doubles results change a singles ladder or record', () => {
+    const plain = demo();
+    const both = withDoubles();
+    for (let i = 0; i < 2; i++) {
+      expect(both.boards[i]!.standings.map((s) => [s.key, s.rating, s.record.wins])).toEqual(
+        plain.boards[i]!.standings.map((s) => [s.key, s.rating, s.record.wins]),
+      );
+    }
+  });
+
+  it('balances wins against losses on every doubles board', () => {
+    for (const board of withDoubles().boards.filter((b) => b.format === 'doubles')) {
+      const wins = board.standings.reduce((n, s) => n + s.record.wins, 0);
+      expect(wins).toBe(board.standings.reduce((n, s) => n + s.record.losses, 0));
+      expect(wins).toBe(board.matches.length);
+    }
+  });
+
+  it('shows Challenge Pending for both pairs of an open doubles challenge', () => {
+    const boys = withDoubles().boards.find((b) => b.id === 'Boys:doubles')!.standings;
+    const status = (name: string) => boys.find((s) => s.displayName === name)!.displayStatus;
+    expect(status('Pedro Alvarez / Ravi Menon')).toBe('Challenge Pending');
+    expect(status('Adrian Foster / Johnny Park')).toBe('Challenge Pending');
+    expect(status('Jake Whitmore / Mike Sullivan')).toBe('Available');
+  });
+
+  it('puts a pair on injury hold when either partner is injured, and names mixed pairs', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\n',
+      doublesCsv: 'Pair 1,Pair 2,Score\nJake / Marcus,Pedro / Adrian,6-4\nJake / Sofia,Pedro / Maya,6-3',
+      rosterCsv: 'Name,Team,Status\nJake,Boys,\nMarcus,Boys,Injured\nPedro,Boys,\nAdrian,Boys,\nSofia,Girls,\nMaya,Girls,',
+      config,
+      now: NOW,
+    });
+    const boys = d.boards.find((b) => b.id === 'Boys:doubles')!.standings;
+    expect(boys.find((s) => s.displayName === 'Jake / Marcus')!.displayStatus).toBe('Injury Hold');
+    expect(boys.find((s) => s.displayName === 'Adrian / Pedro')!.displayStatus).toBe('Available');
+    expect(d.boards.find((b) => b.id === 'Mixed:doubles')!.label).toBe('Mixed Doubles');
+  });
+
+  it('does not open a doubles-only sheet on an empty singles ladder', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Pair 1,Pair 2,Score\nJake / Marcus,Pedro / Adrian,6-4',
+      config,
+      now: NOW,
+    });
+    expect(d.boards.map((b) => b.label)).toEqual(['Doubles Ladder']);
+  });
+
+  it('reports an unreadable Doubles tab without blocking the singles ladder', () => {
+    const d = buildDashboard({ matchesCsv: demoMatches, rosterCsv: demoRoster, doublesCsv: 'Foo,Bar\n1,2', config, now: NOW });
+    expect(d.boards.map((b) => b.label)).toEqual(['Boys Ladder', 'Girls Ladder']);
+    expect(d.issues.find((i) => i.code === 'doubles-mapping-incomplete')!.tab).toBe('Doubles tab');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Data integrity - the promises the dashboard makes about its own numbers.
 // ---------------------------------------------------------------------------
 describe('data integrity', () => {
@@ -339,6 +442,45 @@ describe('data integrity', () => {
     const d = buildDashboard({ matchesCsv: 'Foo,Bar\n1,2', config, now: NOW });
     expect(d.issues.some((i) => i.code === 'mapping-incomplete')).toBe(true);
     expect(d.boards).toEqual([]);
+  });
+
+  it('puts a rostered player with no Team on no ladder, rather than on every ladder', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Team,Person 1,Person 2,Score\nGirls,Ana,Bea,6-1\nBoys,Cal,Dan,6-2',
+      rosterCsv: 'Name,Grade\nAna,11\nBea,10\nCal,12\nDan,9\nEve,9',
+      config,
+      now: NOW,
+    });
+    const girls = d.boards.find((b) => b.team === 'Girls')!.standings.map((s) => s.displayName);
+    const boys = d.boards.find((b) => b.team === 'Boys')!.standings.map((s) => s.displayName);
+    expect(girls.sort()).toEqual(['Ana', 'Bea']);
+    expect(boys.sort()).toEqual(['Cal', 'Dan']);
+    // Grades still arrive from the roster for players whose team came from their matches.
+    expect(d.boards.find((b) => b.team === 'Girls')!.standings.find((s) => s.displayName === 'Ana')!.grade).toBe(11);
+    // Eve has neither a Team nor a match to infer one from - and says so.
+    expect(d.issues.find((i) => i.code === 'unassigned-team')!.message).toContain('Eve');
+  });
+
+  it('treats a saved column mapping that points past the last column as unset', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\nJake,Marcus,6-1',
+      config,
+      now: NOW,
+      mappingOverride: { playerA: 9 },
+    });
+    expect(d.mapping.playerA).toBe(-1);
+    expect(d.issues.some((i) => i.code === 'mapping-incomplete')).toBe(true);
+  });
+
+  it('reads a new season with a roster but no results as a normal state, not an error', () => {
+    const d = buildDashboard({
+      matchesCsv: 'Person 1,Person 2,Score\n',
+      rosterCsv: 'Name\nAna\nBea',
+      config,
+      now: NOW,
+    });
+    expect(d.issues.find((i) => i.code === 'no-matches')!.severity).toBe('warning');
+    expect(d.boards[0]!.standings.map((s) => s.displayName).sort()).toEqual(['Ana', 'Bea']);
   });
 
   it('flags a player in results who is missing from the roster', () => {
