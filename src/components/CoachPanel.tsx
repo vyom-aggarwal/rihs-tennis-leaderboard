@@ -17,11 +17,11 @@ import type { OpenChallenge } from '../lib/challenge';
 import type { MatchField, MatchMapping } from '../lib/schema';
 import { formatScore } from '../lib/score';
 import { issueLocation, sortIssues } from '../lib/dashboard';
-import type { PublishedLadder } from '../lib/publish';
+import type { LastUpdate, PublishedLadder } from '../lib/publish';
 import { parseSheetUrl, SheetError } from '../lib/sheets';
 import type { CsvTable } from '../lib/csv';
 import type { DataIssue, LadderConfig, Match } from '../lib/types';
-import { formatDate, relativeTime } from './common';
+import { coachLabel, formatDate, longRelativeTime, relativeTime } from './common';
 
 const FIELD_LABELS: Array<{ field: MatchField; label: string; hint: string }> = [
   { field: 'playerA', label: 'First player', hint: 'Required. On a ladder this is the challenger.' },
@@ -213,6 +213,16 @@ interface Props {
   onLoadHistory: () => void;
   onRestore: (entry: PublishedLadder) => void;
   onSignOut: (() => void) | null;
+  /** Server mode: the name this coach signed in with. */
+  coachName: string | null;
+  /** Who last refreshed or published, and when. */
+  lastUpdate: LastUpdate | null;
+  refreshing: boolean;
+  refreshError: string | null;
+  /** Re-read the sheet and record this coach's refresh. Null where there is no team page to tell. */
+  onRefreshLeaderboard: (() => void) | null;
+  /** The host has tied this site to one Google Sheet, so it cannot be swapped here. */
+  sheetLocked: boolean;
   now: Date;
 }
 
@@ -248,6 +258,12 @@ export function CoachPanel({
   onLoadHistory,
   onRestore,
   onSignOut,
+  coachName,
+  lastUpdate,
+  refreshing,
+  refreshError,
+  onRefreshLeaderboard,
+  sheetLocked,
   now,
 }: Props) {
   const sorted = sortIssues(issues);
@@ -260,6 +276,37 @@ export function CoachPanel({
 
   return (
     <div className="stack">
+      {/* ------------------------------------------------------------- refresh */}
+      {onRefreshLeaderboard && (
+        <section className="card panel">
+          <h3>Refresh the leaderboard</h3>
+          <p className="panel-note">
+            Re-reads the connected Google Sheet now and lets the team see that you updated the
+            leaderboard, under your name.{' '}
+            {sheetLocked
+              ? 'This site is permanently connected to one Google Sheet.'
+              : 'The team page always reads the sheet you published.'}
+          </p>
+          <div className="row">
+            <button className="btn btn-primary" onClick={onRefreshLeaderboard} disabled={refreshing}>
+              {refreshing ? 'Refreshing…' : coachName ? 'Refresh as ' + coachLabel(coachName) : 'Refresh leaderboard'}
+            </button>
+            <span className="small muted">
+              {lastUpdate
+                ? coachLabel(lastUpdate.coach) +
+                  (lastUpdate.kind === 'publish' ? ' published ' : ' refreshed ') +
+                  longRelativeTime(new Date(lastUpdate.at), now)
+                : 'Nobody has refreshed the leaderboard yet.'}
+            </span>
+          </div>
+          {refreshError && (
+            <div className="notice notice-error" style={{ marginTop: 10, marginBottom: 0 }} role="alert">
+              {refreshError}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* ---------------------------------------------------- team page / sharing */}
       {mode === 'server' ? (
         <section className="card panel">
@@ -693,6 +740,7 @@ export function CoachPanel({
                       })}
                     </strong>
                     {i === 0 && <span className="muted"> · live now</span>}
+                    {entry.coach && <span className="muted"> · {coachLabel(entry.coach)}</span>}
                     <br />
                     <span className="small muted">{entry.note || 'No note'}</span>
                   </span>

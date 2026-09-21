@@ -13,7 +13,8 @@ const SHEET = 'https://docs.google.com/spreadsheets/d/E2EFixtureSheet00000000000
 test.describe.configure({ mode: 'serial' });
 test.use({ baseURL: BASE });
 
-async function signIn(page: Page, password = PASSWORD) {
+async function signIn(page: Page, password = PASSWORD, name = 'Lokesh') {
+  await page.getByLabel('Your name').fill(name);
   await page.getByLabel('Coach password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
@@ -23,7 +24,11 @@ test('a visitor sees that nothing is published yet, and a wrong password is refu
   await expect(page.getByRole('heading', { name: 'The ladder has not been published yet' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Coach sign-in' }).click();
-  await expect(page.getByLabel('Coach password')).toBeFocused();
+  await expect(page.getByLabel('Your name')).toBeFocused();
+  await page.getByLabel('Your name').fill('Lokesh');
+  await page.getByLabel('Coach password').fill('x');
+  await page.getByLabel('Your name').fill('');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeDisabled(); // a name is required
   await signIn(page, 'not-the-password');
   await expect(page.getByRole('alert')).toHaveText('That password is not right.');
 });
@@ -60,8 +65,32 @@ test('the coach previews the sheet, adds the Roster and Doubles tabs, and publis
 
   const status = await page.request.get('/api/ladder').then((r) => r.json());
   expect(status.published.note).toBe('Season start');
+  expect(status.published.coach).toBe('Lokesh');
   expect(status.published.query).toContain('roster=111');
   expect(status.published.query).toContain('doubles=222');
+  expect(status.lastUpdate).toMatchObject({ coach: 'Lokesh', kind: 'publish' });
+});
+
+test('the team sees which coach last changed the leaderboard, and when', async ({ browser }) => {
+  const team = await browser.newPage();
+  await team.goto(BASE + '/');
+  await expect(team.locator('.ds-last-change')).toHaveText('Coach Lokesh updated the leaderboard just now');
+  await team.close();
+});
+
+test('a coach refreshes the leaderboard under their own name, and the team sees it', async ({ page, browser }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Coach', exact: true }).click();
+  await signIn(page, PASSWORD, 'Ana Rivera');
+  await page.getByRole('button', { name: 'Refresh as Coach Ana Rivera' }).click();
+  await expect(page.locator('.ds-last-change')).toHaveText('Coach Ana Rivera updated the leaderboard just now');
+  await expect(page.getByText('Coach Ana Rivera refreshed just now')).toBeVisible();
+
+  const team = await browser.newPage();
+  await team.goto(BASE + '/');
+  await expect(team.locator('.ds-last-change')).toContainText('Coach Ana Rivera updated the leaderboard');
+  await expect(team.getByRole('button', { name: /Refresh as/ })).toHaveCount(0);
+  await team.close();
 });
 
 test('the team sees the published ladder at the plain address, with no coach tools', async ({ browser }) => {

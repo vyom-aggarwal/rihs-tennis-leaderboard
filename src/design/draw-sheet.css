@@ -161,6 +161,17 @@
   margin: 14px 0 0;
 }
 
+.ds-last-change {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--ds-muted);
+}
+
+.ds-last-change strong {
+  color: var(--ds-ink-soft);
+  font-weight: 600;
+}
+
 /* ---------------------------------------------------------------- table */
 
 .ds-table {

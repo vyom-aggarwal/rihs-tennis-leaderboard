@@ -111,8 +111,10 @@ directly, so Google must be willing to serve it to them.
 ## Step 3 — Connect it and publish
 
 1. Open the team site and choose **Coach sign-in** (or **Coach** in the top corner once a
-   ladder is published). Enter the coach password.
-2. Paste the sheet link and press **Preview the ladder**.
+   ladder is published). Enter your name and the coach password. Your name appears to the
+   team next to what you change ("Coach Lokesh updated the leaderboard 3 hours ago").
+2. Paste the sheet link and press **Preview the ladder**. (If whoever set up the site tied
+   it to one sheet, this step is skipped — the sheet is already connected.)
 3. Look over the preview. Only you can see it — a **Not published yet** bar says so.
 4. In the **Coach console → More tabs**, paste links to your Roster and Doubles tabs, if
    you have them. Click the tab in Google Sheets first, then copy the address bar.
@@ -144,6 +146,11 @@ its Status to `Cancelled`. Doubles challenges work the same way with pairs.
 ### Recording a result
 Type it into the sheet. The ladder updates within 30 seconds on every device that has the
 page open. You do not need to publish again — publishing is only for *settings*.
+
+### Refreshing the leaderboard
+Open the **Coach console** and press **Refresh as Coach *your name***. The sheet is re-read
+right away, and the top of the team page reads "Coach *your name* updated the leaderboard
+just now", counting up from there. Publishing settings does the same.
 
 ### Verifying results
 Add a `Status` column. Put `Pending` on new results, change it to `Verified` once you have

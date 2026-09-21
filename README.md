@@ -81,7 +81,10 @@ challenge.
 
 **Coach publishing** — the coach signs in with a password, connects the sheet, previews
 changes privately, and publishes them to the whole team. The last 20 publishes are kept
-and any of them can be restored.
+and any of them can be restored. **Coach console → Refresh the leaderboard** re-reads the
+sheet and stamps the team page with who did it — "Coach Lokesh updated the leaderboard 3
+hours ago". The name is typed at sign-in; with one shared password it says whom to ask, not
+who proved they were whom.
 
 **Exports** — download the visible ladder as CSV, copy it as text for a group chat, or
 print it.
@@ -157,9 +160,14 @@ Connect the Roster and Doubles tabs in **Coach console → More tabs**.
 3. **Set the coach password.** In **Settings → Environment Variables**, add
    `COACH_PASSWORD` — at least 10 characters — for Production (and Preview, if you use
    preview deployments).
-4. **Redeploy**, so the new variables take effect.
-5. Open the site, choose **Coach sign-in**, paste the sheet link, check the preview and
-   press **Publish to team**. Share the site's plain address with everyone.
+4. **Optional: tie the site to one Google Sheet.** Add `LADDER_SHEET` — the sheet's link
+   (or just its id) — and the site is permanently connected to it: visitors never see a
+   "connect a sheet" screen and nobody can publish a different sheet. Without it, the
+   coach pastes a sheet link on first sign-in instead.
+5. **Redeploy**, so the new variables take effect.
+6. Open the site, choose **Coach sign-in**, enter your name and the password (and paste
+   the sheet link, unless you set `LADDER_SHEET`), check the preview and press **Publish to
+   team**. Share the site's plain address with everyone.
 
 Until steps 2 and 3 are done, the site tells visitors which step is missing and still
 offers the demo. Changing `COACH_PASSWORD` later signs every coach device out.

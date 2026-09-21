@@ -6,16 +6,24 @@
  * team's official ladder?" - so that everyone who opens the site's plain address sees the
  * same board, and only someone who knows the coach password can change it.
  *
- *   GET  /api/ladder                          public: the published ladder settings
+ *   GET  /api/ladder                          public: the published ladder settings, who last
+ *                                             refreshed it and when, and the locked sheet if any
  *   POST /api/ladder  { action: "login" }     password -> a signed, expiring coach token
  *   POST /api/ladder  { action: "verify" }    is this token still valid?
- *   POST /api/ladder  { action: "publish" }   token + settings -> the new official ladder
+ *   POST /api/ladder  { action: "refresh" }   token + coach name -> "Coach X refreshed the ladder now"
+ *   POST /api/ladder  { action: "publish" }   token + coach name + settings -> the new official ladder
  *   POST /api/ladder  { action: "history" }   token -> the last 20 publishes, newest first
  *
  * No accounts, no student data. The stored value is the same query string a shared
- * ladder link carries (sheet id, tab ids, rule settings, column mapping) plus a timestamp
- * and the coach's note, in an Upstash Redis store connected through the Vercel
- * Marketplace. The coach password is a Vercel environment variable and is never stored.
+ * ladder link carries (sheet id, tab ids, rule settings, column mapping) plus a timestamp,
+ * the coach's note and the coach's name, in an Upstash Redis store connected through the
+ * Vercel Marketplace. The coach password is a Vercel environment variable and is never
+ * stored. The coach name is typed at sign-in: everyone shares one password, so it says who
+ * to ask, not who proved they were whom.
+ *
+ * LADDER_SHEET (optional): the Google Sheets link or id this deployment is permanently
+ * tied to. When set, nobody can publish a different sheet and the team never sees a
+ * "connect a sheet" screen.
  *
  * Plain JavaScript on purpose: Vercel runs it as-is, with no compile step to get wrong.
  */
@@ -30,10 +38,12 @@ export const MIN_PASSWORD_LENGTH = 10;
 
 const PUBLISHED_KEY = 'rihs:published';
 const HISTORY_KEY = 'rihs:publish-history';
+const LAST_UPDATE_KEY = 'rihs:last-update';
 const FAILURE_KEY_PREFIX = 'rihs:login-failures:';
 const MAX_BODY_BYTES = 10_000;
 const MAX_QUERY_LENGTH = 2_000;
 const MAX_NOTE_LENGTH = 200;
+const MAX_NAME_LENGTH = 40;
 
 /** Settings a published ladder may carry - exactly what a shared ladder link carries. */
 const ALLOWED_PARAMS = new Set([
@@ -48,8 +58,11 @@ const ALLOWED_PARAMS = new Set([
  * @property {string} [KV_REST_API_TOKEN]
  * @property {string} [UPSTASH_REDIS_REST_URL]
  * @property {string} [UPSTASH_REDIS_REST_TOKEN]
+ * @property {string} [LADDER_SHEET]
  *
- * @typedef {{ query: string, publishedAt: string, note: string }} PublishedLadder
+ * @typedef {{ query: string, publishedAt: string, note: string, coach: string }} PublishedLadder
+ * @typedef {{ coach: string, at: string, kind: 'refresh' | 'publish' }} LastUpdate
+ * @typedef {{ sheet: string, gid: string | null }} LockedSheet
  * @typedef {'ready' | 'needs-storage' | 'needs-password' | 'weak-password'} PublishingState
  */
 
@@ -137,6 +150,49 @@ export function normalizeQuery(raw) {
   return '?' + out.toString();
 }
 
+/**
+ * A coach's display name: letters, digits, spaces and a few name punctuation marks. A
+ * leading "Coach" is dropped because the page adds it ("Coach Lokesh").
+ * @param {unknown} raw
+ * @returns {string | null} the cleaned name, or null when missing or unusable
+ */
+export function sanitizeCoachName(raw) {
+  if (typeof raw !== 'string') return null;
+  const name = raw.replace(/\s+/g, ' ').trim().replace(/^coach(\s+|$)/i, '').slice(0, MAX_NAME_LENGTH).trim();
+  return name && /^[\p{L}\p{M}0-9 .'’-]+$/u.test(name) ? name : null;
+}
+
+/**
+ * The sheet this deployment is permanently tied to, from LADDER_SHEET (a Google Sheets
+ * link or a bare id), or null when the coach may choose any sheet.
+ * @param {Env} env
+ * @returns {LockedSheet | null}
+ */
+export function lockedSheet(env) {
+  const raw = (env.LADDER_SHEET ?? '').trim();
+  if (!raw) return null;
+  const published = raw.match(/\/spreadsheets\/d\/e\/([A-Za-z0-9_-]{20,200})/);
+  const doc = raw.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,200})/);
+  const bare = /^(e\/)?[A-Za-z0-9_-]{20,200}$/.test(raw);
+  const sheet = published ? 'e/' + published[1] : doc ? doc[1] : bare ? raw : null;
+  if (!sheet) return null;
+  const gid = raw.match(/[#?&]gid=(\d+)/);
+  return { sheet, gid: gid ? gid[1] : null };
+}
+
+/**
+ * Point a ladder query at the locked sheet, whatever it said before.
+ * @param {string} query a normalized "?..." query
+ * @param {LockedSheet | null} lock
+ */
+function applyLock(query, lock) {
+  if (!lock) return query;
+  const params = new URLSearchParams(query.slice(1));
+  params.set('sheet', lock.sheet);
+  if (lock.gid) params.set('gid', lock.gid);
+  return normalizeQuery('?' + params.toString()) ?? query;
+}
+
 /** @param {unknown} value @returns {PublishedLadder | null} */
 function parseEntry(value) {
   if (typeof value !== 'string') return null;
@@ -144,7 +200,25 @@ function parseEntry(value) {
     const entry = JSON.parse(value);
     const query = normalizeQuery(entry?.query);
     if (!query || typeof entry.publishedAt !== 'string') return null;
-    return { query, publishedAt: entry.publishedAt, note: typeof entry.note === 'string' ? entry.note : '' };
+    return {
+      query,
+      publishedAt: entry.publishedAt,
+      note: typeof entry.note === 'string' ? entry.note : '',
+      coach: sanitizeCoachName(entry.coach) ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** @param {unknown} value @returns {LastUpdate | null} */
+function parseLastUpdate(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const entry = JSON.parse(value);
+    const coach = sanitizeCoachName(entry?.coach);
+    if (!coach || typeof entry.at !== 'string' || Number.isNaN(Date.parse(entry.at))) return null;
+    return { coach, at: entry.at, kind: entry.kind === 'publish' ? 'publish' : 'refresh' };
   } catch {
     return null;
   }
@@ -211,12 +285,17 @@ export async function handleLadderRequest(request, env, options = {}) {
 
   try {
     if (request.method === 'GET' || request.method === 'HEAD') {
+      const lock = lockedSheet(env);
       let published = null;
+      let lastUpdate = null;
       if (store) {
-        const [value] = await redis(store, [['GET', PUBLISHED_KEY]], fetchImpl);
+        const [value, updated] = await redis(store, [['GET', PUBLISHED_KEY], ['GET', LAST_UPDATE_KEY]], fetchImpl);
         published = parseEntry(value);
+        lastUpdate = parseLastUpdate(updated);
       }
-      return json(200, { publishing: state, published });
+      // A changed LADDER_SHEET takes effect at once, even for an older published version.
+      if (published && lock) published = { ...published, query: applyLock(published.query, lock) };
+      return json(200, { publishing: state, published, lastUpdate, lockedSheet: lock });
     }
 
     if (request.method !== 'POST') {
@@ -272,26 +351,43 @@ export async function handleLadderRequest(request, env, options = {}) {
       return json(200, { history });
     }
 
-    if (action === 'publish') {
-      const query = normalizeQuery(body.query);
-      if (!query) return json(400, { error: 'Those ladder settings are not valid.', code: 'invalid-settings' });
+    if (action === 'refresh' || action === 'publish') {
+      const coach = sanitizeCoachName(body.name);
+      if (!coach) {
+        return json(400, { error: 'Enter your name so the team can see who made this change.', code: 'name-required' });
+      }
+      const at = new Date(now).toISOString();
+
+      if (action === 'refresh') {
+        /** @type {LastUpdate} */
+        const lastUpdate = { coach, at, kind: 'refresh' };
+        await redis(store, [['SET', LAST_UPDATE_KEY, JSON.stringify(lastUpdate)]], fetchImpl);
+        return json(200, { lastUpdate });
+      }
+
+      const normalized = normalizeQuery(body.query);
+      if (!normalized) return json(400, { error: 'Those ladder settings are not valid.', code: 'invalid-settings' });
       /** @type {PublishedLadder} */
       const entry = {
-        query,
-        publishedAt: new Date(now).toISOString(),
+        query: applyLock(normalized, lockedSheet(env)),
+        publishedAt: at,
         note: typeof body.note === 'string' ? body.note.trim().slice(0, MAX_NOTE_LENGTH) : '',
+        coach,
       };
+      /** @type {LastUpdate} */
+      const lastUpdate = { coach, at, kind: 'publish' };
       const serialized = JSON.stringify(entry);
       await redis(
         store,
         [
           ['SET', PUBLISHED_KEY, serialized],
+          ['SET', LAST_UPDATE_KEY, JSON.stringify(lastUpdate)],
           ['LPUSH', HISTORY_KEY, serialized],
           ['LTRIM', HISTORY_KEY, '0', String(HISTORY_LIMIT - 1)],
         ],
         fetchImpl,
       );
-      return json(200, { published: entry });
+      return json(200, { published: entry, lastUpdate });
     }
 
     return json(400, { error: 'Unknown action.' });

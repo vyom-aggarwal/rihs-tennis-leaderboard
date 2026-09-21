@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { formatDate, initials, relativeTime } from '../components/common';
+import { coachLabel, formatDate, initials, longRelativeTime, relativeTime } from '../components/common';
 import type { ChallengeOption } from '../lib/challenge';
 import { issueLocation } from '../lib/dashboard';
 import { exportFileName, standingsCsv, standingsText } from '../lib/export';
@@ -70,6 +70,8 @@ export interface DrawSheetLeaderboardProps {
   now: Date;
   /** Minutes after which the sync line reads as stale. Defaults to 15. */
   staleAfterMinutes?: number;
+  /** Who last refreshed or published the ladder: "Coach Lokesh updated the leaderboard 3 hours ago". */
+  lastChange?: { coach: string; at: Date } | null;
   /** Small text actions (refresh, coach console, ...) shown next to the sync line. */
   headerActions?: ReactNode;
   /** Contextual notices (demo mode, stale data, unpublished changes) shown above the table. */
@@ -207,6 +209,15 @@ export function DrawSheetLeaderboard(props: DrawSheetLeaderboardProps) {
           )}
         </div>
         <hr className="ds-rule" />
+
+        {ready && props.lastChange && (
+          <p className="ds-last-change">
+            <strong>{coachLabel(props.lastChange.coach)}</strong> updated the leaderboard{' '}
+            <time dateTime={props.lastChange.at.toISOString()} title={props.lastChange.at.toLocaleString()}>
+              {longRelativeTime(props.lastChange.at, props.now)}
+            </time>
+          </p>
+        )}
 
         {ready && activeGroup && activeGroup.divisions.length > 1 && (
           <div className="ds-format-switch" role="group" aria-label="Singles or doubles">

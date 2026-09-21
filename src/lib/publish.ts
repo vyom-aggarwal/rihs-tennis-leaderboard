@@ -14,16 +14,35 @@ export interface PublishedLadder {
   query: string;
   publishedAt: string;
   note: string;
+  /** Who published it. Empty for versions published before names were recorded. */
+  coach: string;
+}
+
+/** The most recent time a coach refreshed or published the ladder, and who. */
+export interface LastUpdate {
+  coach: string;
+  at: string;
+  kind: 'refresh' | 'publish';
+}
+
+/** The sheet this deployment is permanently tied to (LADDER_SHEET), when it is. */
+export interface LockedSheet {
+  sheet: string;
+  gid: string | null;
 }
 
 export interface LadderStatus {
   publishing: PublishingState;
   published: PublishedLadder | null;
+  lastUpdate: LastUpdate | null;
+  lockedSheet: LockedSheet | null;
 }
 
 export interface CoachSession {
   token: string;
   expiresAt: number;
+  /** The name typed at sign-in; shown to the team as "Coach <name>". */
+  coachName: string;
 }
 
 export class PublishError extends Error {
@@ -41,7 +60,9 @@ export class PublishError extends Error {
 export const LADDER_ENDPOINT = '/api/ladder';
 
 const PUBLISHED_CACHE_KEY = 'rihs:published';
+const LAST_UPDATE_CACHE_KEY = 'rihs:last-update';
 const SESSION_KEY = 'rihs:coach-session';
+const COACH_NAME_KEY = 'rihs:coach-name';
 
 type FetchImpl = typeof fetch;
 
@@ -51,6 +72,22 @@ function isPublishedLadder(value: unknown): value is PublishedLadder {
     !!v && typeof v.query === 'string' && v.query.startsWith('?') && typeof v.publishedAt === 'string' && typeof v.note === 'string'
   );
 }
+
+function isLastUpdate(value: unknown): value is LastUpdate {
+  const v = value as LastUpdate | null;
+  return !!v && typeof v.coach === 'string' && v.coach !== '' && typeof v.at === 'string' && !Number.isNaN(Date.parse(v.at));
+}
+
+function isLockedSheet(value: unknown): value is LockedSheet {
+  const v = value as LockedSheet | null;
+  return !!v && typeof v.sheet === 'string' && v.sheet !== '' && (v.gid === null || typeof v.gid === 'string');
+}
+
+/** Entries stored before coach names were recorded have no `coach`. */
+const withCoach = (entry: PublishedLadder): PublishedLadder => ({
+  ...entry,
+  coach: typeof entry.coach === 'string' ? entry.coach : '',
+});
 
 const STATES: PublishingState[] = ['ready', 'needs-storage', 'needs-password', 'weak-password'];
 
@@ -78,7 +115,9 @@ export async function fetchLadderStatus(fetchImpl: FetchImpl = fetch, signal?: A
   if (!STATES.includes(body.publishing as PublishingState)) return null;
   return {
     publishing: body.publishing as PublishingState,
-    published: isPublishedLadder(body.published) ? body.published : null,
+    published: isPublishedLadder(body.published) ? withCoach(body.published) : null,
+    lastUpdate: isLastUpdate(body.lastUpdate) ? body.lastUpdate : null,
+    lockedSheet: isLockedSheet(body.lockedSheet) ? body.lockedSheet : null,
   };
 }
 
@@ -101,12 +140,12 @@ async function post<T>(body: Record<string, unknown>, fetchImpl: FetchImpl): Pro
   return payload;
 }
 
-export async function coachLogin(password: string, fetchImpl: FetchImpl = fetch): Promise<CoachSession> {
-  const result = await post<CoachSession>({ action: 'login', password }, fetchImpl);
+export async function coachLogin(password: string, coachName: string, fetchImpl: FetchImpl = fetch): Promise<CoachSession> {
+  const result = await post<{ token: string; expiresAt: number }>({ action: 'login', password }, fetchImpl);
   if (typeof result.token !== 'string' || typeof result.expiresAt !== 'number') {
     throw new PublishError('The site sent an unexpected response.', 500);
   }
-  return { token: result.token, expiresAt: result.expiresAt };
+  return { token: result.token, expiresAt: result.expiresAt, coachName: coachName.trim() };
 }
 
 export async function verifyCoachSession(session: CoachSession, fetchImpl: FetchImpl = fetch): Promise<boolean> {
@@ -124,15 +163,30 @@ export async function publishLadder(
   query: string,
   note: string,
   fetchImpl: FetchImpl = fetch,
-): Promise<PublishedLadder> {
-  const result = await post<{ published: PublishedLadder }>({ action: 'publish', token: session.token, query, note }, fetchImpl);
-  if (!isPublishedLadder(result.published)) throw new PublishError('The site sent an unexpected response.', 500);
-  return result.published;
+): Promise<{ published: PublishedLadder; lastUpdate: LastUpdate }> {
+  const result = await post<{ published: PublishedLadder; lastUpdate: LastUpdate }>(
+    { action: 'publish', token: session.token, name: session.coachName, query, note },
+    fetchImpl,
+  );
+  if (!isPublishedLadder(result.published) || !isLastUpdate(result.lastUpdate)) {
+    throw new PublishError('The site sent an unexpected response.', 500);
+  }
+  return { published: withCoach(result.published), lastUpdate: result.lastUpdate };
+}
+
+/** Record that this coach just refreshed the ladder, so the team sees who and when. */
+export async function refreshLadder(session: CoachSession, fetchImpl: FetchImpl = fetch): Promise<LastUpdate> {
+  const result = await post<{ lastUpdate: LastUpdate }>(
+    { action: 'refresh', token: session.token, name: session.coachName },
+    fetchImpl,
+  );
+  if (!isLastUpdate(result.lastUpdate)) throw new PublishError('The site sent an unexpected response.', 500);
+  return result.lastUpdate;
 }
 
 export async function publishHistory(session: CoachSession, fetchImpl: FetchImpl = fetch): Promise<PublishedLadder[]> {
   const result = await post<{ history: PublishedLadder[] }>({ action: 'history', token: session.token }, fetchImpl);
-  return Array.isArray(result.history) ? result.history.filter(isPublishedLadder) : [];
+  return Array.isArray(result.history) ? result.history.filter(isPublishedLadder).map(withCoach) : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -140,20 +194,34 @@ export async function publishHistory(session: CoachSession, fetchImpl: FetchImpl
 // throw, and none of this is essential.
 // ---------------------------------------------------------------------------
 
-/** The coach session on this device, or null when absent or expired. */
+/**
+ * The coach session on this device, or null when absent, expired, or saved before names
+ * were recorded (that coach signs in once more and is asked for a name).
+ */
 export function readCoachSession(now = Date.now()): CoachSession | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null') as CoachSession | null;
     if (!parsed || typeof parsed.token !== 'string' || typeof parsed.expiresAt !== 'number') return null;
+    if (typeof parsed.coachName !== 'string' || !parsed.coachName.trim()) return null;
     return parsed.expiresAt > now ? parsed : null;
   } catch {
     return null;
   }
 }
 
+/** The name this browser's coach last signed in with, to prefill the next sign-in. */
+export function readCoachName(): string {
+  try {
+    return localStorage.getItem(COACH_NAME_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export function saveCoachSession(session: CoachSession): void {
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    localStorage.setItem(COACH_NAME_KEY, session.coachName);
   } catch {
     // The coach just has to enter the password again next visit.
   }
@@ -181,6 +249,25 @@ export function cachePublished(published: PublishedLadder | null): void {
   try {
     if (published) localStorage.setItem(PUBLISHED_CACHE_KEY, JSON.stringify(published));
     else localStorage.removeItem(PUBLISHED_CACHE_KEY);
+  } catch {
+    // Offline fallback is a convenience only.
+  }
+}
+
+/** The last "who refreshed it, and when" this browser saw, so it still shows offline. */
+export function readCachedLastUpdate(): LastUpdate | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LAST_UPDATE_CACHE_KEY) ?? 'null') as unknown;
+    return isLastUpdate(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function cacheLastUpdate(lastUpdate: LastUpdate | null): void {
+  try {
+    if (lastUpdate) localStorage.setItem(LAST_UPDATE_CACHE_KEY, JSON.stringify(lastUpdate));
+    else localStorage.removeItem(LAST_UPDATE_CACHE_KEY);
   } catch {
     // Offline fallback is a convenience only.
   }

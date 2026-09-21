@@ -45,7 +45,9 @@ import {
   PublishError,
   publishHistory,
   publishLadder,
+  readCoachName,
   readCoachSession,
+  refreshLadder,
   saveCoachSession,
   verifyCoachSession,
   type CoachSession,
@@ -110,6 +112,7 @@ export default function App() {
   const [signIn, setSignIn] = useState<AsyncStatus>(IDLE);
   const [publishNote, setPublishNote] = useState('');
   const [publishStatus, setPublishStatus] = useState<AsyncStatus>(IDLE);
+  const [refreshStatus, setRefreshStatus] = useState<AsyncStatus>(IDLE);
   const [history, setHistory] = useState<PublishedLadder[] | null>(null);
   const [historyStatus, setHistoryStatus] = useState<AsyncStatus>(IDLE);
   const [showCoachPanel, setShowCoachPanel] = useState(false);
@@ -120,7 +123,22 @@ export default function App() {
   // A link that carries its own sheet still works when the publishing check fails outright.
   const siteFailed = site.phase === 'error' && !urlState.sheetId;
 
-  const publishedState = useMemo(() => (site.published ? readAppState(site.published.query) : null), [site.published]);
+  // A deployment can be tied to one sheet (LADDER_SHEET). Then that sheet is the ladder even
+  // before anything is published, and no screen offers a different one.
+  const lock = serverMode ? site.lockedSheet : null;
+  const withLock = useCallback(
+    (state: AppState): AppState => (lock ? { ...state, sheetId: lock.sheet, gid: lock.gid ?? state.gid } : state),
+    [lock],
+  );
+  const publishedState = useMemo(
+    () =>
+      site.published
+        ? withLock(readAppState(site.published.query))
+        : lock
+          ? withLock(DEFAULT_APP_STATE)
+          : null,
+    [site.published, lock, withLock],
+  );
   const coach = serverMode ? session !== null : urlState.coach;
 
   // The settings being shown right now. In server mode the URL never chooses the sheet:
@@ -342,6 +360,7 @@ export default function App() {
   };
 
   const chooseDifferentSheet = () => {
+    if (lock) return;
     if (!serverMode) {
       setUrlState((s) => ({ ...s, ...CLEARED_SHEET, ladder: null }));
       return;
@@ -375,10 +394,10 @@ export default function App() {
     setSignInOpen(true);
   };
 
-  const submitSignIn = async (password: string) => {
+  const submitSignIn = async (password: string, name: string) => {
     setSignIn({ busy: true, error: null });
     try {
-      const next = await coachLogin(password);
+      const next = await coachLogin(password, name);
       saveCoachSession(next);
       setSession(next);
       setSignIn(IDLE);
@@ -397,6 +416,7 @@ export default function App() {
     setHistory(null);
     setHistoryStatus(IDLE);
     setPublishStatus(IDLE);
+    setRefreshStatus(IDLE);
   };
 
   /** A 401 means the token expired or the password changed. The preview is kept for after sign-in. */
@@ -411,8 +431,12 @@ export default function App() {
     if (!session || !view?.sheetId || isDemo) return;
     setPublishStatus({ busy: true, error: null });
     try {
-      const published = await publishLadder(session, writeAppState({ ...view, coach: false, ladder: null }), publishNote);
-      site.setPublished(published);
+      const { published, lastUpdate } = await publishLadder(
+        session,
+        writeAppState({ ...view, coach: false, ladder: null }),
+        publishNote,
+      );
+      site.setPublished(published, lastUpdate);
       setDraft(null);
       setPublishNote('');
       setHistory(null);
@@ -424,6 +448,24 @@ export default function App() {
         return;
       }
       setPublishStatus({ busy: false, error: messageOf(err, 'Publishing failed. Try again.') });
+    }
+  };
+
+  /** Re-read the sheet now, and tell the team which coach did it. */
+  const refreshLeaderboard = async () => {
+    if (!session) return;
+    setRefreshStatus({ busy: true, error: null });
+    live.refresh();
+    try {
+      site.setLastUpdate(await refreshLadder(session));
+      setRefreshStatus(IDLE);
+    } catch (err) {
+      if (err instanceof PublishError && err.status === 401) {
+        setRefreshStatus(IDLE);
+        endSession();
+        return;
+      }
+      setRefreshStatus({ busy: false, error: messageOf(err, 'The refresh could not be recorded. Try again.') });
     }
   };
 
@@ -445,7 +487,7 @@ export default function App() {
 
   const restore = (entry: PublishedLadder) => {
     setServerDemo(false);
-    setDraft(readAppState(entry.query));
+    setDraft(withLock(readAppState(entry.query)));
     setUrlState((s) => ({ ...s, ladder: null }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -466,7 +508,13 @@ export default function App() {
   );
 
   const signInDialog = signInOpen ? (
-    <CoachSignIn busy={signIn.busy} error={signIn.error} onSubmit={submitSignIn} onClose={closeSignIn} />
+    <CoachSignIn
+      busy={signIn.busy}
+      error={signIn.error}
+      initialName={session?.coachName ?? readCoachName()}
+      onSubmit={submitSignIn}
+      onClose={closeSignIn}
+    />
   ) : null;
 
   // ---------------------------------------------------------------- checking
@@ -593,7 +641,7 @@ export default function App() {
         <button className="ds-text-link" onClick={live.refresh}>
           Try again
         </button>
-        {coach && (
+        {coach && !lock && (
           <button className="ds-text-link" onClick={chooseDifferentSheet}>
             Use a different sheet
           </button>
@@ -766,6 +814,12 @@ export default function App() {
           onLoadHistory={loadHistory}
           onRestore={restore}
           onSignOut={serverMode ? signOut : null}
+          coachName={serverMode ? (session?.coachName ?? null) : null}
+          lastUpdate={site.lastUpdate}
+          refreshing={refreshStatus.busy}
+          refreshError={refreshStatus.error}
+          onRefreshLeaderboard={serverMode && !isDemo ? refreshLeaderboard : null}
+          sheetLocked={lock !== null}
           now={now}
         />
       </div>
@@ -820,6 +874,9 @@ export default function App() {
       onSelectDivision={(ladder) => setUrlState((s) => ({ ...s, ladder }))}
       status={status}
       lastSynced={isDemo ? null : live.lastUpdated}
+      lastChange={
+        serverMode && !isDemo && site.lastUpdate ? { coach: site.lastUpdate.coach, at: new Date(site.lastUpdate.at) } : null
+      }
       now={now}
       staleAfterMinutes={15}
       headerActions={headerActions}
